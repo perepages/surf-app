@@ -1,0 +1,5 @@
+# Python 3.11+. Install with: pip install -r jobs/requirements.txt
+supabase>=2.0          # database + storage client
+scikit-learn>=1.5      # baseline models
+xgboost>=2.1           # per-spot correction model
+ultralytics>=8.3       # YOLO crowd counting on cam snapshots (CPU)

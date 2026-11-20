@@ -1,0 +1,24 @@
+name: Nightly train
+
+on:
+  workflow_dispatch: # run by hand from the Actions tab
+  # Enable once the job does real work (cron is in UTC):
+  # schedule:
+  #   - cron: "0 3 * * *"
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # Dependencies are installed once the job needs them:
+      # - run: pip install -r jobs/requirements.txt
+      - run: python -m jobs.train
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          WINDY_API_KEY: ${{ secrets.WINDY_API_KEY }}

@@ -1,0 +1,31 @@
+# Secrets: never commit real keys
+.env
+.env.*
+!.env.example
+
+# Node / web
+node_modules/
+dist/
+*.local
+*.log
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Local data (database, cam snapshots)
+*.db
+*.db-journal
+data/
+logs/
+
+# Personal files from old sessions (photos, videos, screenshots)
+my_old_data/
+
+# Editors / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
