@@ -58,7 +58,20 @@ Spots are **config-driven**, so more can be added later without code changes.
   from repo root), `jobs/` (placeholder `collect.py` / `train.py`, `requirements.txt`),
   `supabase/migrations/` (empty), `.github/workflows/collect.yml` + `train.yml` (manual run
   only, cron commented out), `.env.example`, `.gitignore`, README. Pushed to GitHub `surf-app`.
-- [ ] Not built yet: Supabase project + schema, real jobs, PWA setup, forecast UI.
+- [x] Step 2 (2026-11-20): database design approved. `supabase/migrations/`
+  `20261120000001_initial_schema.sql` (spots, forecasts, observations, snapshots, ratings,
+  models, predictions; RLS: public reads active spots, forecasts, predictions and inserts
+  `community` ratings from the last 7 days; everything else service key only; private
+  `snapshots` bucket) and `20261120000002_seed_vilanova.sql` (Vilanova, orientation 165°
+  to verify, buoys 1731 + 2720), plus `20261120000003_grants.sql` (explicit table grants:
+  new Supabase projects don't auto-grant `public` tables). Supabase project exists; all 3
+  migrations applied 2026-11-20; `check_connections.py` passes 9/9 locally.
+- [x] Step 3 (2026-11-20): `jobs/check_connections.py` (stdlib only; checks Open-Meteo, anon key
+  RLS, service key + `snapshots` bucket, Windy key, and that no secret sits in a `VITE_*` var;
+  skips checks whose vars are missing) + manual workflow `.github/workflows/check.yml`.
+  Keys: `VITE_SUPABASE_URL`/`VITE_SUPABASE_ANON_KEY` in `.env` + Vercel/Netlify;
+  `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY`/`WINDY_API_KEY` in `.env` + GitHub Actions secrets.
+- [ ] Not built yet: Supabase project (apply migrations), real jobs, PWA setup, forecast UI.
 - Earlier local prototype (built under the previous plan; still in this folder, not yet
   migrated):
   - `collector/` (Python, local SQLite in `C:\Users\pages\surf-app-data\surf.db`, paths in
