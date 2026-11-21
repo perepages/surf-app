@@ -124,7 +124,9 @@ async function summary(db: ReturnType<typeof supabase>) {
 export async function handleAdmin(request: Request, env: Env): Promise<Response> {
   if (request.method !== 'POST') return json(405, { error: 'Use POST' })
 
-  const password = env.ADMIN_PASSWORD ?? ''
+  // trim: a value pasted into Vercel's settings often carries a space or line break at either
+  // end; the page trims what's typed the same way.
+  const password = (env.ADMIN_PASSWORD ?? '').trim()
   if (password.length < MIN_PASSWORD) {
     return json(503, { error: `Admin is off: set ADMIN_PASSWORD (at least ${MIN_PASSWORD} characters) on the server.` })
   }
@@ -132,7 +134,7 @@ export async function handleAdmin(request: Request, env: Env): Promise<Response>
   if (!db.ok) return json(503, { error: 'Admin is off: set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY on the server.' })
 
   const auth = request.headers.get('authorization') ?? ''
-  const given = auth.startsWith('Bearer ') ? auth.slice(7) : ''
+  const given = auth.startsWith('Bearer ') ? auth.slice(7).trim() : ''
   if (!samePassword(given, password)) {
     await sleep(1000) // slows down guessing
     return json(401, { error: 'Wrong password' })
