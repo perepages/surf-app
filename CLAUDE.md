@@ -182,6 +182,50 @@ Spots are **config-driven**, so more can be added later without code changes.
   (Vite reads them from the process env; `envDir: '..'` only matters locally). Checked locally:
   build with host-style env vars works and inlines them. **Not done yet**: Vercel project
   creation (needs the owner's login), live URL, header check on the live site.
+- [x] Step 10 (2026-11-21): share kit. Live address `https://surfwithai.vercel.app` (one place:
+  `web/src/lib/site.ts`, also the share title/description). Short link **`/rate`** opens the app
+  with the rating form up (`OPENED_TO_RATE` in `App.tsx`, then the address is set back to `/`;
+  `vercel.json` rewrites `/rate` to `index.html`; the service worker serves it offline too;
+  `#rate` works as well). `index.html`: title, description, canonical, Open Graph + Twitter tags
+  filled at build by the `shareTags` plugin in `vite.config.ts`; `og.png` is left out of the
+  service-worker precache. `npm run share-kit` (`scripts/share-kit.mjs`; draws with headless
+  Chrome, QR via the **`qrcode` devDependency**, approved, never shipped to phones) writes
+  `public/og.png` (1200x630) and `web/share-kit/`: `poster-a5.pdf` (A5, 1 page, QR 60 mm =
+  2 mm modules, version 3-M), `poster-a5.png`, `share-square.png`, `share-story.png`,
+  `qr-rate.svg|png`, plus a README with a message to paste. Checked: built tags, `/rate` opens
+  the form and a reload doesn't, the QR's data is the `/rate` URL (no decoder at hand: scan it
+  with a phone before printing), measure script still passes (service worker, offline,
+  installable). The browser pane can't register service workers (pane limit, not the app).
+  `.claude/launch.json` has `web-prod-alt` (serve:dist on 4174). Not done: real link previews
+  can only be checked once deployed (WhatsApp caches previews; test with a fresh link).
+- [x] Step 11 (2026-11-21): cookie-free analytics + `/admin`. Migration 8
+  (`...0008_admin_and_counts`, applied and tested on the live database 2026-11-21): `ratings.hidden`/`hidden_at` (public can't set
+  them), the two public summary functions now skip hidden ratings, `daily_counts` (UTC day x
+  kind `visit`/`visit_app`/`install`, no public access) + `count_event(p_kind)` (security
+  definer, adds 1). App: `src/lib/analytics.ts` counts one visit per app start (after load,
+  idle; `visit_app` when standalone) and `appinstalled`; only on the live origin (`SITE_URL`),
+  never localhost/previews; no cookie, id or local storage. Reload = another visit (opens,
+  not people); iPhone never reports installs; anyone with the public key can inflate counts.
+  `/admin` (lazy `AdminPage.tsx`, chosen in `main.tsx`, no counting there): password form,
+  7/30-day tiles, 30-day table (visits, installed app, installs, ratings, hidden), latest 50
+  ratings with "Hide as spam"/"Show again". Server: Vercel function `web/api/admin.ts`
+  (POST, `Authorization: Bearer <ADMIN_PASSWORD>`, constant-time compare, 1 s delay on a wrong
+  password, refuses to run if the password is < 16 chars; uses `SUPABASE_URL` +
+  `SUPABASE_SERVICE_ROLE_KEY` server-side; device ids cut to 6 chars). In `npm run dev` the
+  same handler runs via the `devApi` plugin (reads root `.env`; a generated `ADMIN_PASSWORD` is
+  in the local `.env`). `vercel.json`: `/admin` rewrite + `noindex`; service worker skips
+  `/api/`. Privacy page mentions the counters and the admin. Tested locally: wrong/missing
+  password 401, GET 405, bad input 400, right password reaches Supabase (fails until
+  migration 8: friendly "Database not ready" message); UI tested with stubbed data (login
+  error, tiles, table, hide/show, phone width); no count sent from localhost.
+  Live test (2026-11-21, test rows/counts removed afterwards): admin summary, public
+  `count_event` (+1 seen by admin; unknown kind ignored), public can't read/insert
+  `daily_counts` or set `hidden`, hide removes a rating from `spot_reports_today` and
+  `spot_daily_ratings` and the admin table shows it hidden, show again restores it, unknown id
+  404. **Not tested yet**: on Vercel (needs `ADMIN_PASSWORD`, `SUPABASE_URL`,
+  `SUPABASE_SERVICE_ROLE_KEY` in Vercel env), real login in the browser with the real password. Train job must skip
+  `hidden = true`. Supabase returns max 1000 rows per request: the 30-day ratings count caps
+  there.
 - [ ] Open items (do before or while building the jobs):
   - Fill in `CONTACT` in `PrivacyPage.tsx` before going public.
   - Comments are public with no moderation; the per-device limit is beaten by clearing site

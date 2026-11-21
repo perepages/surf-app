@@ -2,10 +2,11 @@ import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { join, relative, sep } from 'node:path'
-import { defineConfig, type Plugin } from 'vite'
+import { join, relative, resolve, sep } from 'node:path'
+import { defineConfig, loadEnv, type Plugin } from 'vite'
 import { CACHE_TTL_MS, FETCHED_AT_KEY, primaryRequestUrls } from './src/lib/forecastRequest.ts'
 import { DEFAULT_SPOT_ID, FALLBACK_SPOTS } from './src/lib/spots.config.ts'
+import { SHARE_DESCRIPTION, SHARE_TITLE, SITE_URL } from './src/lib/site.ts'
 
 const { version } = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string }
 
@@ -48,7 +49,8 @@ function serviceWorker(): Plugin {
         }
       }
       walk(root)
-      const precache = files.filter((f) => f !== 'sw.js').sort()
+      // og.png is only fetched by link previews (WhatsApp etc.), never by the app itself.
+      const precache = files.filter((f) => f !== 'sw.js' && f !== 'og.png').sort()
       const hash = createHash('sha256')
       for (const f of precache) hash.update(f).update(readFileSync(join(root, f)))
       const sw = readFileSync(new URL('./sw/sw.template.js', import.meta.url), 'utf8')
@@ -84,9 +86,55 @@ ${JSON.stringify(templates)}.forEach(function(u){u=u.replace('__LAT__',s.lat).re
   }
 }
 
+/** Fills %SITE_URL%, %SHARE_TITLE% and %SHARE_DESCRIPTION% in index.html from src/lib/site.ts. */
+function shareTags(): Plugin {
+  const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
+  const values: Record<string, string> = { SITE_URL, SHARE_TITLE, SHARE_DESCRIPTION }
+  return {
+    name: 'surf-share-tags',
+    transformIndexHtml: (html) => html.replace(/%(SITE_URL|SHARE_TITLE|SHARE_DESCRIPTION)%/g, (_, k: string) => esc(values[k])),
+  }
+}
+
+/**
+ * `npm run dev` only: runs the Vercel function api/admin.ts inside Vite, so /admin works
+ * locally. Server-side values (ADMIN_PASSWORD, SUPABASE_*) come from the root .env and stay
+ * on this machine; only VITE_* values ever reach the browser.
+ */
+function devApi(): Plugin {
+  return {
+    name: 'surf-dev-api',
+    apply: 'serve',
+    configureServer(server) {
+      const env = loadEnv(server.config.mode, resolve(server.config.root, '..'), '')
+      server.middlewares.use('/api/admin', async (req, res) => {
+        try {
+          const chunks: Buffer[] = []
+          for await (const c of req) chunks.push(c as Buffer)
+          const headers = new Headers()
+          for (const [k, v] of Object.entries(req.headers)) if (typeof v === 'string') headers.set(k, v)
+          const request = new Request(`http://localhost/api/admin`, {
+            method: req.method,
+            headers,
+            body: req.method === 'GET' || req.method === 'HEAD' ? undefined : Buffer.concat(chunks),
+          })
+          const mod = (await server.ssrLoadModule('/api/admin.ts')) as typeof import('./api/admin.ts')
+          const response = await mod.handleAdmin(request, { ...process.env, ...env })
+          res.statusCode = response.status
+          response.headers.forEach((v, k) => res.setHeader(k, v))
+          res.end(Buffer.from(await response.arrayBuffer()))
+        } catch (err) {
+          res.statusCode = 500
+          res.end(String(err))
+        }
+      })
+    },
+  }
+}
+
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), tailwindcss(), prefetchForecast(), serviceWorker()],
+  plugins: [react(), tailwindcss(), shareTags(), prefetchForecast(), serviceWorker(), devApi()],
   // Read .env from the repo root so there is one .env for web/ and jobs/.
   envDir: '..',
   // Sent with each rating so training can tell app versions apart.

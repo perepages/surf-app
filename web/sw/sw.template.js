@@ -53,6 +53,7 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return
   const url = new URL(req.url)
   if (url.origin !== self.location.origin) return // data APIs: straight to the network
+  if (url.pathname.startsWith('/api/')) return // our own server functions (admin): never cached
 
   // Opening the app: serve this version's cached shell at once (works offline). A new deploy
   // installs a new worker in the background and is used from the next start.

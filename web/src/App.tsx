@@ -60,6 +60,15 @@ function WhenNear({
   )
 }
 
+/**
+ * Opened via the short link /rate (QR poster, shared links): start with the rating form open.
+ * Read once at start-up; the address is then set back to "/" so a reload, the back button or
+ * "Add to Home Screen" doesn't land on the form again. Vercel serves index.html for /rate
+ * (vercel.json rewrite) and the service worker does too, so it also works offline.
+ */
+const OPENED_TO_RATE = window.location.pathname.replace(/\/+$/, '') === '/rate' || window.location.hash === '#rate'
+if (OPENED_TO_RATE) window.history.replaceState(null, '', '/')
+
 /** "#privacy" shows the privacy page; anything else the forecast. No router needed for two views. */
 function useHash(): string {
   const [hash, setHash] = useState(() => window.location.hash)
@@ -188,9 +197,10 @@ function SpotScreen({ spot, forecast, stale, refreshing, ai, now, online, report
     [days, todayIdx],
   )
 
-  const [rating, setRating] = useState(false)
+  // The short link /rate (the poster's QR code) opens the app with the rating form already up.
+  const [rating, setRating] = useState(OPENED_TO_RATE)
   // The form's code is downloaded on first open and then kept, so closing can animate.
-  const [ratingLoaded, setRatingLoaded] = useState(false)
+  const [ratingLoaded, setRatingLoaded] = useState(OPENED_TO_RATE)
   const openRating = () => {
     setRatingLoaded(true)
     setRating(true)

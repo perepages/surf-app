@@ -4,11 +4,25 @@
     <meta charset="UTF-8" />
     <!-- viewport-fit=cover: the app runs under the iPhone status bar / home indicator; CSS pads with safe-area insets. -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>Vilanova surf</title>
-    <meta
-      name="description"
-      content="Surf forecast for Platja de Vilanova i la Geltrú: a 1-5 score for every hour, corrected every night by what surfers report."
-    />
+    <title>%SHARE_TITLE%</title>
+    <meta name="description" content="%SHARE_DESCRIPTION%" />
+    <link rel="canonical" href="%SITE_URL%/" />
+
+    <!-- How a shared link looks (WhatsApp, Instagram, Telegram, X, iMessage). Values come from
+         src/lib/site.ts; the image is made by `npm run share-kit` and must be an absolute URL. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Vilanova Surf" />
+    <meta property="og:url" content="%SITE_URL%/" />
+    <meta property="og:title" content="%SHARE_TITLE%" />
+    <meta property="og:description" content="%SHARE_DESCRIPTION%" />
+    <meta property="og:image" content="%SITE_URL%/og.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Vilanova Surf: a wave and the words: How were the waves today? Rate them and help train a better forecast." />
+    <meta property="og:locale" content="en_GB" />
+    <meta name="twitter:card" content="summary_large_image" />
+
     <meta name="theme-color" content="#031b26" />
     <meta name="color-scheme" content="dark" />
 

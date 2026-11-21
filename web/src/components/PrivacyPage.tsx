@@ -36,8 +36,18 @@ export function PrivacyPage() {
         <ul className="list-disc space-y-1.5 pl-5">
           <li>Your location. The distance check happens on your phone; the position is never sent anywhere.</li>
           <li>Your IP address, in our database.</li>
-          <li>Anything at all if you only look at the forecast.</li>
+          <li>Anything about you if you only look at the forecast.</li>
+          <li>Cookies, or any id for counting visitors.</li>
         </ul>
+      </Section>
+
+      <Section title="Counting visits">
+        <p>
+          Each time the app opens, it adds 1 to a counter for that day (one counter for the browser, one for
+          the installed app), and 1 to another when your browser reports that the app was installed.
+          Only the daily totals are kept: no cookie, no id, nothing stored on your phone, nothing
+          that tells one visit from another.
+        </p>
       </Section>
 
       <Section title="Who sees it">
@@ -45,7 +55,7 @@ export function PrivacyPage() {
           Everyone sees summaries: how many people rated today, the average score, the most common
           wave size and crowd, the latest comments, and the daily average for the last 14 days. Single
           ratings can’t be read, changed or deleted through the app, not even by whoever sent them; only
-          the nightly training job reads them. Like any website, the services we use (Supabase for the
+          the nightly training job and the app’s admin (to hide spam) read them. Like any website, the services we use (Supabase for the
           database, and our hosting) may keep short technical logs of requests.
         </p>
       </Section>
