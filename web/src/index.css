@@ -1,1 +1,60 @@
 @import 'tailwindcss';
+
+/* Self-hosted variable fonts, Latin subset (SIL Open Font License, from Google Fonts). */
+@font-face {
+  font-family: 'Big Shoulders Display';
+  src: url('/fonts/big-shoulders-display-latin.woff2') format('woff2');
+  font-weight: 600 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Familjen Grotesk';
+  src: url('/fonts/familjen-grotesk-latin.woff2') format('woff2');
+  font-weight: 400 700;
+  font-display: swap;
+}
+
+/* Mediterranean at night: deep water, posidonia seagrass, foam, and three signal colours. */
+@theme {
+  --color-abyss: #031b26;
+  --color-deep: #072f3f;
+  --color-kelp: #0f5257;
+  --color-foam: #e6f2ee;
+  --color-mist: #8fb3bc;
+  --color-glass: #5fe3c0;
+  --color-sand: #f4c95d;
+  --color-coral: #ff7a66;
+
+  /* Score scale 1-5, from dull water to bright foam */
+  --color-s1: #24434f;
+  --color-s2: #2f6f78;
+  --color-s3: #3fa79a;
+  --color-s4: #5fe3c0;
+  --color-s5: #c9ffec;
+
+  --font-display: 'Big Shoulders Display', 'Arial Narrow', Impact, sans-serif;
+  --font-sans: 'Familjen Grotesk', ui-sans-serif, system-ui, sans-serif;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--color-abyss);
+  color: var(--color-foam);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-glass);
+  outline-offset: 2px;
+}
+
+/* Installed on iPhone the app draws under the status bar and home indicator. */
+body {
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}

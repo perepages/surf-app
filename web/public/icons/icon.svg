@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Full-bleed square: safe as a maskable icon (artwork stays inside the central 80%). -->
+  <rect width="512" height="512" fill="#031b26"/>
+  <!-- back swell -->
+  <path d="M0 318 C110 296 170 300 230 322 C290 344 350 344 512 290 L512 420 L0 420 Z" fill="#0f5257"/>
+  <!-- breaking wave with a curl -->
+  <path d="M0 372
+           C140 372 182 330 200 268
+           C222 192 292 140 364 152
+           C424 162 456 214 436 262
+           C422 296 378 302 360 276
+           C346 256 360 230 384 234
+           C372 212 334 208 308 234
+           C272 270 280 352 360 370
+           L512 370 L512 420 L0 420 Z" fill="#5fe3c0"/>
+  <!-- water body -->
+  <rect x="0" y="410" width="512" height="102" fill="#0c4150"/>
+</svg>

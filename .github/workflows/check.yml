@@ -3,17 +3,21 @@ name: Check connections
 on:
   workflow_dispatch: # run by hand from the Actions tab after adding or changing secrets
 
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       # Only the jobs' secrets live here. The web app's VITE_* keys belong in Vercel/Netlify.
-      - run: python -m jobs.check_connections
+      # --require-jobs: a missing secret fails the run instead of being skipped.
+      - run: python -m jobs.check_connections --require-jobs
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

@@ -3,11 +3,16 @@
 Run from the repo root:  python -m jobs.check_connections
 Locally it reads .env; in GitHub Actions it uses the repository secrets.
 Checks whose variables are missing are SKIPPED, so the same script works in both places.
+With --require-jobs, missing jobs variables (Supabase service key, Windy) FAIL instead of
+skipping; the GitHub workflow uses this so empty secrets can't give a green run.
+Exit code: 0 = all good, 1 = at least one check failed.
 Uses only the Python standard library (works on 3.10+).
 """
 from __future__ import annotations
 
+import argparse
 import base64
+import http.client
 import json
 import os
 import sys
@@ -18,6 +23,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 TIMEOUT = 20
 results: list[tuple[str, str, str]] = []  # (status, check, detail)
+REQUIRE_JOBS = False
 
 
 def load_dotenv(path: Path) -> None:
@@ -47,14 +53,15 @@ def record(status: str, check: str, detail: str = "") -> None:
 def request(url: str, headers: dict[str, str] | None = None,
             method: str = "GET", body: bytes | None = None) -> tuple[int, str]:
     """Return (status code, body text). Network errors return status 0."""
-    req = urllib.request.Request(url, headers=headers or {}, method=method, data=body)
     try:
+        req = urllib.request.Request(url, headers=headers or {}, method=method, data=body)
         with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
             return resp.status, resp.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read().decode("utf-8", "replace")
-    except (urllib.error.URLError, TimeoutError) as exc:
-        return 0, str(exc)
+    except (OSError, http.client.HTTPException, ValueError) as exc:
+        # OSError covers URLError, timeouts, resets; ValueError = malformed URL.
+        return 0, f"{type(exc).__name__}: {exc}"
 
 
 def supabase_headers(key: str) -> dict[str, str]:
@@ -63,6 +70,11 @@ def supabase_headers(key: str) -> dict[str, str]:
     if key.startswith("eyJ"):
         headers["Authorization"] = f"Bearer {key}"
     return headers
+
+
+def missing(check: str, detail: str, required: bool = False) -> None:
+    """Missing variables: SKIP normally, FAIL when they are required."""
+    record("FAIL" if required else "SKIP", check, detail)
 
 
 def key_role(key: str) -> str:
@@ -150,7 +162,7 @@ def check_supabase_service() -> None:
     url, key = env("SUPABASE_URL"), env("SUPABASE_SERVICE_ROLE_KEY")
     name = "Supabase service key (jobs)"
     if not (url and key):
-        record("SKIP", name, "SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set")
+        missing(name, "SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set", REQUIRE_JOBS)
         return
     if key_role(key) == "public":
         record("FAIL", name, "SUPABASE_SERVICE_ROLE_KEY holds the public key, not the secret one")
@@ -170,7 +182,7 @@ def check_windy() -> None:
     key = env("WINDY_API_KEY")
     name = "Windy Webcams API v3 key"
     if not key:
-        record("SKIP", name, "WINDY_API_KEY not set")
+        missing(name, "WINDY_API_KEY not set", REQUIRE_JOBS)
         return
     code, body = request("https://api.windy.com/webcams/api/v3/webcams?limit=1",
                          {"x-windy-api-key": key})
@@ -179,6 +191,11 @@ def check_windy() -> None:
 
 
 def main() -> int:
+    global REQUIRE_JOBS
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--require-jobs", action="store_true",
+                        help="fail (not skip) when the jobs' variables are missing")
+    REQUIRE_JOBS = parser.parse_args().require_jobs
     load_dotenv(ROOT / ".env")
     print("Checking connections (key values are never printed)\n")
     check_open_meteo()

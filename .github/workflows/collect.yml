@@ -2,17 +2,25 @@ name: Hourly collect
 
 on:
   workflow_dispatch: # run by hand from the Actions tab
-  # Enable once the job does real work (cron is in UTC):
+  # Enable once the job does real work. Cron is in UTC; an off-the-hour minute avoids
+  # GitHub's busiest slot, when scheduled runs are often delayed or dropped.
   # schedule:
-  #   - cron: "0 * * * *"
+  #   - cron: "17 * * * *" # every hour at :17
+
+permissions:
+  contents: read # the job only needs to read the code
+
+concurrency:
+  group: collect # never run two at once; a new run waits for the old one
+  cancel-in-progress: false
 
 jobs:
   collect:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       # Dependencies are installed once the job needs them:

@@ -29,3 +29,6 @@ my_old_data/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Lighthouse reports (regenerate any time)
+lighthouse-reports/
