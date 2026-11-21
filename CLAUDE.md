@@ -173,9 +173,16 @@ Spots are **config-driven**, so more can be added later without code changes.
   - App left open never refreshed: forecast now re-checked every 5 min while visible (refetch
     after 30 min); today's reports every 15 min while visible and when back online, and a copy
     from an earlier day is dropped instead of shown as "today".
+- [ ] Step 9 (2026-11-21, asked for as "Step 3"): deploy `web/` to **Vercel** (Hobby, Git
+  integration: push to `main` = production, any other branch = preview URL).
+  `web/vercel.json`: Vite preset, `npm ci`, `npm run build`, `dist`; `Cache-Control: no-cache`
+  for `/`, `/index.html`, `/sw.js`, `/manifest.webmanifest`; `/assets/*` + `/fonts/*` immutable
+  (font files aren't hashed: rename one if it ever changes). Vercel project Root Directory =
+  `web`; env vars `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` for Production and Preview
+  (Vite reads them from the process env; `envDir: '..'` only matters locally). Checked locally:
+  build with host-style env vars works and inlines them. **Not done yet**: Vercel project
+  creation (needs the owner's login), live URL, header check on the live site.
 - [ ] Open items (do before or while building the jobs):
-  - **Deploy config**: `sw.js` + `index.html` need `Cache-Control: no-cache`, `/assets/*` +
-    `/fonts/*` immutable (see `web/scripts/serve-dist.mjs`); no `vercel.json`/`_headers` yet.
   - Fill in `CONTACT` in `PrivacyPage.tsx` before going public.
   - Comments are public with no moderation; the per-device limit is beaten by clearing site
     data (anyone with the public key can script inserts). Before launch: a way to hide comments,
@@ -203,7 +210,7 @@ Spots are **config-driven**, so more can be added later without code changes.
   - `ultralytics` pulls a large CUDA `torch` by default; install the CPU build in Actions.
   - `jobs/requirements.txt` has no upper version bounds; pin once the jobs work.
   - The train job must switch `models.is_active` in one transaction (only one active per spot).
-- [ ] Not built yet: real collect/train jobs, deploy to Vercel/Netlify.
+- [ ] Not built yet: real collect/train jobs.
 - Earlier local prototype (built under the previous plan; still in this folder, not yet
   migrated):
   - `collector/` (Python, local SQLite in `C:\Users\pages\surf-app-data\surf.db`, paths in
