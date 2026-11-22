@@ -63,6 +63,15 @@ surf-app/
    The forecast collector needs only the standard library (Python 3.10+):
    `python -m jobs.collect_forecast --dry-run --show 2` prints without writing.
 
+## Freeing disk space
+
+`clean.ps1` deletes rebuildable folders (node_modules, dist, caches, reports) after listing them
+with sizes and asking y/N:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\clean.ps1 -DryRun
+```
+
 ## Secrets
 
 Keys live only in `.env` locally and in GitHub Actions secrets / Vercel (or Netlify) env vars
