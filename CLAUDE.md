@@ -173,15 +173,17 @@ Spots are **config-driven**, so more can be added later without code changes.
   - App left open never refreshed: forecast now re-checked every 5 min while visible (refetch
     after 30 min); today's reports every 15 min while visible and when back online, and a copy
     from an earlier day is dropped instead of shown as "today".
-- [ ] Step 9 (2026-11-21, asked for as "Step 3"): deploy `web/` to **Vercel** (Hobby, Git
-  integration: push to `main` = production, any other branch = preview URL).
-  `web/vercel.json`: Vite preset, `npm ci`, `npm run build`, `dist`; `Cache-Control: no-cache`
-  for `/`, `/index.html`, `/sw.js`, `/manifest.webmanifest`; `/assets/*` + `/fonts/*` immutable
-  (font files aren't hashed: rename one if it ever changes). Vercel project Root Directory =
-  `web`; env vars `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` for Production and Preview
-  (Vite reads them from the process env; `envDir: '..'` only matters locally). Checked locally:
-  build with host-style env vars works and inlines them. **Not done yet**: Vercel project
-  creation (needs the owner's login), live URL, header check on the live site.
+- [x] Step 9 (2026-11-21, asked for as "Step 3"): deploy `web/` to **Vercel** (Hobby, Git
+  integration: push to `main` = production, any other branch = preview URL behind Vercel's
+  login). `web/vercel.json`: Vite preset, `npm ci`, `npm run build`, `dist`; `Cache-Control:
+  no-cache` for `/`, `/index.html`, `/sw.js`, `/manifest.webmanifest`; `/assets/*` + `/fonts/*`
+  immutable (font files aren't hashed: rename one if it ever changes). Vercel project Root
+  Directory = `web`; env vars `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` for Production and
+  Preview. Vercel project exists: **production is `https://isitworthsurf.vercel.app`**;
+  `https://surfwithai.vercel.app` is set up in Vercel as a 307 redirect to it. As of 2026-11-22
+  production still runs old `main` (f0e56f5, before `vercel.json`): `/rate`, `/admin`, `og.png`
+  are 404 there and the cache headers are Vercel's defaults. Everything from Step 9 on is on
+  branch `test-preview` (preview builds pass), not merged yet.
 - [x] Step 10 (2026-11-21): share kit. Live address `https://surfwithai.vercel.app` (one place:
   `web/src/lib/site.ts`, also the share title/description). Short link **`/rate`** opens the app
   with the rating form up (`OPENED_TO_RATE` in `App.tsx`, then the address is set back to `/`;
@@ -222,11 +224,44 @@ Spots are **config-driven**, so more can be added later without code changes.
   `count_event` (+1 seen by admin; unknown kind ignored), public can't read/insert
   `daily_counts` or set `hidden`, hide removes a rating from `spot_reports_today` and
   `spot_daily_ratings` and the admin table shows it hidden, show again restores it, unknown id
-  404. **Not tested yet**: on Vercel (needs `ADMIN_PASSWORD`, `SUPABASE_URL`,
-  `SUPABASE_SERVICE_ROLE_KEY` in Vercel env), real login in the browser with the real password. Train job must skip
+  404. On the Vercel preview the function runs (answers "Wrong password"); a successful login
+  there is **not confirmed yet** (see the review below). Train job must skip
   `hidden = true`. Supabase returns max 1000 rows per request: the 30-day ratings count caps
   there.
+- [x] Review of steps 9-11 (2026-11-22): no keys, passwords or `.env` in any commit on any
+  branch (checked by value); `dist/` ignored. Fixed:
+  - **Visit counter would never have counted**: it only ran on the `SITE_URL` origin
+    (`surfwithai`), but production is served from `isitworthsurf` (redirect). Now it's on when
+    Vercel builds for production (`__COUNT_VISITS__` = `VERCEL_ENV === 'production'` in
+    `vite.config.ts`, declared in `src/globals.d.ts`), on any address; preview and local builds
+    compile it to `false` (checked in the built JS). Needs Vercel's "Automatically expose
+    System Environment Variables" (on by default), else counting is silently off.
+  - **Admin password moved from the `Authorization` header to the JSON body** (`password`):
+    Vercel's preview protection may handle `Authorization` itself (likely cause of "Wrong
+    password" on the preview), and headers can't carry ñ/é. Both ends trim spaces; `Bearer`
+    still accepted for scripts; non-object bodies -> 400. Tested locally (body, wrong, ñ,
+    header fallback) and in the browser (no Authorization header sent).
+  - Admin shows a warning when the 30-day ratings query hits Supabase's 1000-row limit
+    (`ratingsCapped`) instead of a silently low number.
+  - `vercel.json`: `trailingSlash: false` (`/admin/`, `/rate/` redirect to the plain path) and
+    `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy` on every path.
+  Not fixed (listed below in open items).
 - [ ] Open items (do before or while building the jobs):
+  - **Merge `test-preview` into `main`** to put steps 9-11 live (local `main` also has an
+    unpushed commit, 3f51532, which `test-preview` already contains).
+  - **Pick the main address**: `SITE_URL` (QR poster, `/rate` link, canonical, `og:url`,
+    `og:image`) is `surfwithai.vercel.app`, which only 307-redirects to the production address
+    `isitworthsurf.vercel.app`. Either make `surfwithai` the production domain in Vercel
+    (Settings > Domains) or change `src/lib/site.ts` and re-run `npm run share-kit` before
+    printing posters. Some link-preview crawlers don't follow redirects for `og:image`.
+  - Vercel env for **Production** too: `ADMIN_PASSWORD`, `SUPABASE_URL`,
+    `SUPABASE_SERVICE_ROLE_KEY` (else `/admin` says "Admin is off" after the merge). Confirm a
+    real login on the preview after the body-password fix.
+  - `/rate` opens the form only once the forecast has loaded; if Open-Meteo fails and there's no
+    saved copy, the error screen shows and the form doesn't open.
+  - Anyone with the public key can call `count_event` and inflate visits/installs.
+  - Admin brute force: 1 s delay per wrong guess but parallel requests aren't limited; keep the
+    password long and random (16+ characters enforced).
   - Fill in `CONTACT` in `PrivacyPage.tsx` before going public.
   - Comments are public with no moderation; the per-device limit is beaten by clearing site
     data (anyone with the public key can script inserts). Before launch: a way to hide comments,

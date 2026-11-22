@@ -34,6 +34,7 @@ interface Rating {
 interface Summary {
   days: Day[]
   latest: Rating[]
+  ratingsCapped?: boolean
 }
 
 const SCORE_BG = ['', 'bg-s1 text-foam', 'bg-s2 text-foam', 'bg-s3 text-abyss', 'bg-s4 text-abyss', 'bg-s5 text-abyss']
@@ -41,9 +42,9 @@ const SCORE_BG = ['', 'bg-s1 text-foam', 'bg-s2 text-foam', 'bg-s3 text-abyss', 
 async function callAdmin<T>(password: string, body: object): Promise<T> {
   const res = await fetch('/api/admin', {
     method: 'POST',
-    // trim: copying from .env often picks up a space or line break at either end.
-    headers: { Authorization: `Bearer ${password.trim()}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    headers: { 'Content-Type': 'application/json' },
+    // In the body, not a header (see api/admin.ts). trim: copying often adds a space or line break.
+    body: JSON.stringify({ ...body, password: password.trim() }),
     cache: 'no-store',
     signal: AbortSignal.timeout(20_000),
   })
@@ -172,6 +173,11 @@ export default function AdminPage() {
         Visits = app opens (a reload counts again), counted only on the live site. Installs are reported by Chrome, Edge
         and Android only, never by iPhone. Hidden ratings aren’t counted.
       </p>
+      {data?.ratingsCapped && (
+        <p role="status" className="mt-2 text-sand">
+          Over 1000 ratings in 30 days: the ratings numbers stop there and are too low.
+        </p>
+      )}
 
       <Section title="Last 30 days">
         <div className="overflow-x-auto">

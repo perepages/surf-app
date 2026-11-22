@@ -1,12 +1,11 @@
-import { SITE_URL } from './site'
-
 // Cookie-free usage counts. Each app start adds 1 to a per-day counter in Supabase
 // (count_event, migration 8); an install adds 1 to another. Nothing identifies the phone: no
 // cookie, no id, nothing stored on the device, and the database keeps only the daily totals.
 // A reload counts again, so "visits" means app opens, not people.
 //
-// Only counted on the live address (not localhost, not Vercel preview links), so testing
-// doesn't skew the numbers.
+// Only counted in Vercel's production build (__COUNT_VISITS__, set in vite.config.ts), on any
+// address it's served from. Local builds and preview links never count, so testing doesn't
+// skew the numbers.
 
 type Kind = 'visit' | 'visit_app' | 'install'
 
@@ -14,7 +13,7 @@ const rawUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.trim()
 const key = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined)?.trim() ?? ''
 
 function enabled(): boolean {
-  return import.meta.env.PROD && rawUrl !== '' && key !== '' && window.location.origin === new URL(SITE_URL).origin
+  return __COUNT_VISITS__ && rawUrl !== '' && key !== ''
 }
 
 function send(kind: Kind): void {

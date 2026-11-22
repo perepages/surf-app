@@ -138,5 +138,10 @@ export default defineConfig({
   // Read .env from the repo root so there is one .env for web/ and jobs/.
   envDir: '..',
   // Sent with each rating so training can tell app versions apart.
-  define: { __APP_VERSION__: JSON.stringify(version) },
+  define: {
+    __APP_VERSION__: JSON.stringify(version),
+    // Visits are counted only in Vercel's production build, whatever its address (vercel.app
+    // name, redirect, custom domain). Previews and local builds never count.
+    __COUNT_VISITS__: JSON.stringify(process.env.VERCEL_ENV === 'production'),
+  },
 })

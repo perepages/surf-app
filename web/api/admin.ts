@@ -1,6 +1,9 @@
-// Admin API (Vercel function): POST /api/admin with header `Authorization: Bearer <ADMIN_PASSWORD>`.
-//   {"action":"summary"}                      -> last 30 days of counts + the latest 50 ratings
-//   {"action":"hide","id":123,"hidden":true}  -> hide (or show again) one rating
+// Admin API (Vercel function): POST /api/admin, JSON body with the password and an action:
+//   {"password":"...","action":"summary"}                      -> last 30 days of counts + latest 50 ratings
+//   {"password":"...","action":"hide","id":123,"hidden":true}  -> hide (or show again) one rating
+// The password goes in the body, not a header: Vercel's preview protection may handle
+// `Authorization` headers itself, and headers can't carry characters like ñ or é.
+// (`Authorization: Bearer <password>` still works, for scripts.)
 //
 // Runs on the server only. Needs, in Vercel's environment variables (never VITE_*):
 //   ADMIN_PASSWORD             at least 16 characters, else the API stays off
@@ -113,6 +116,8 @@ async function summary(db: ReturnType<typeof supabase>) {
 
   return {
     days: [...days.values()],
+    // Hit Supabase's 1000-row limit: the ratings column is short. Count in SQL once this happens.
+    ratingsCapped: recent.length >= 1000,
     latest: latest.map(({ device_id, ...r }) => ({
       ...r,
       // Enough to spot one phone sending many ratings; the full id stays in the database.
@@ -133,18 +138,19 @@ export async function handleAdmin(request: Request, env: Env): Promise<Response>
   const db = supabase(env)
   if (!db.ok) return json(503, { error: 'Admin is off: set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY on the server.' })
 
+  let body: { password?: unknown; action?: string; id?: unknown; hidden?: unknown }
+  try {
+    body = (await request.json()) as typeof body
+    if (typeof body !== 'object' || body === null) throw new Error('not an object')
+  } catch {
+    return json(400, { error: 'Body must be a JSON object' })
+  }
+
   const auth = request.headers.get('authorization') ?? ''
-  const given = auth.startsWith('Bearer ') ? auth.slice(7).trim() : ''
+  const given = typeof body.password === 'string' ? body.password.trim() : auth.startsWith('Bearer ') ? auth.slice(7).trim() : ''
   if (!samePassword(given, password)) {
     await sleep(1000) // slows down guessing
     return json(401, { error: 'Wrong password' })
-  }
-
-  let body: { action?: string; id?: unknown; hidden?: unknown }
-  try {
-    body = (await request.json()) as typeof body
-  } catch {
-    return json(400, { error: 'Body must be JSON' })
   }
 
   try {
