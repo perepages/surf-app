@@ -26,9 +26,9 @@ export default function ForecastVsSurfers({ rows, model }: { rows: ChartRow[]; m
   const aiMiss = averageMiss(rows, 'ai')
 
   return (
-    <section aria-labelledby="fvs-title" className="px-4 pt-10 sm:px-8">
-      <h2 id="fvs-title" className="font-display text-2xl font-extrabold">
-        Forecast vs surfers
+    <section aria-labelledby="fvs-title" className="mx-4 rounded-3xl border border-line bg-[#0a3240] px-6 py-5 sm:mx-8">
+      <h2 id="fvs-title" className="font-display text-[26px] font-extrabold">
+        {model?.active ? 'Who called it?' : 'Forecast vs surfers'}
       </h2>
       <p className="mt-1 max-w-[60ch] text-sm text-mist">
         Last {rows.length} days. Where the lines split, the forecast was wrong.
@@ -62,17 +62,17 @@ export default function ForecastVsSurfers({ rows, model }: { rows: ChartRow[]; m
       <div className="mt-2 h-56 w-full" role="img" aria-label="Line chart of daily simple score, AI score and surfer rating; the same numbers are in the table below.">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: -24 }}>
-            <CartesianGrid vertical={false} stroke="#0f5257" strokeOpacity={0.6} />
+            <CartesianGrid vertical={false} stroke="#1f5e70" strokeOpacity={0.8} />
             <XAxis
               dataKey="label"
-              tick={{ fill: '#8fb3bc', fontSize: 11 }}
+              tick={{ fill: '#a9c8cf', fontSize: 11 }}
               tickLine={false}
-              axisLine={{ stroke: '#0f5257' }}
+              axisLine={{ stroke: '#1f5e70' }}
               interval="preserveStartEnd"
               minTickGap={16}
             />
-            <YAxis domain={[1, 5]} ticks={[1, 2, 3, 4, 5]} tick={{ fill: '#8fb3bc', fontSize: 11 }} tickLine={false} axisLine={false} />
-            <Tooltip content={ChartTooltip} cursor={{ stroke: '#8fb3bc', strokeWidth: 1 }} />
+            <YAxis domain={[1, 5]} ticks={[1, 2, 3, 4, 5]} tick={{ fill: '#a9c8cf', fontSize: 11 }} tickLine={false} axisLine={false} />
+            <Tooltip content={ChartTooltip} cursor={{ stroke: '#a9c8cf', strokeWidth: 1 }} />
             {shown.map((s) => (
               <Line
                 key={s.key}
@@ -83,8 +83,8 @@ export default function ForecastVsSurfers({ rows, model }: { rows: ChartRow[]; m
                 strokeWidth={2}
                 strokeDasharray={s.dash}
                 // Surfers: dots with a ring in the surface colour so they stay visible on top of lines.
-                dot={s.dot ? { r: 4, fill: s.color, stroke: '#031b26', strokeWidth: 2 } : false}
-                activeDot={{ r: 5, stroke: '#031b26', strokeWidth: 2 }}
+                dot={s.dot ? { r: 4, fill: s.color, stroke: '#0a3240', strokeWidth: 2 } : false}
+                activeDot={{ r: 5, stroke: '#0a3240', strokeWidth: 2 }}
                 connectNulls={false}
                 isAnimationActive={!reduce}
               />
@@ -147,6 +147,21 @@ function AiVsForecast({ model }: { model: ModelInfo }) {
     <div className="mt-4 max-w-[60ch]">
       {compared > 0 ? (
         <>
+          {/* The scoreboard: how often each was closer to what surfers said. */}
+          <div className="mb-3 grid grid-cols-3 gap-2">
+            <div className="flex flex-col">
+              <span className="font-display text-5xl leading-none font-black tabular-nums text-[#e2b23c]">{aiCloser}</span>
+              <span className="text-xs text-mist">AI closer</span>
+            </div>
+            <div className="flex flex-col">
+              <span className="font-display text-5xl leading-none font-black tabular-nums text-[#8fbaf0]">{simpleCloser}</span>
+              <span className="text-xs text-mist">Forecast closer</span>
+            </div>
+            <div className="flex flex-col">
+              <span className="font-display text-5xl leading-none font-black tabular-nums text-mist">{same}</span>
+              <span className="text-xs text-mist">Same</span>
+            </div>
+          </div>
           <p>
             On <strong className="tabular-nums">{compared}</strong> rated {compared === 1 ? 'hour' : 'hours'} in the last{' '}
             {days} days, the AI was closer to what surfers said <strong className="tabular-nums">{times(aiCloser)}</strong>,
@@ -204,7 +219,7 @@ function Swatch({ color, dash, dot }: { color: string; dash?: string; dot: boole
   return (
     <svg width="22" height="10" aria-hidden className="shrink-0">
       <line x1="1" x2="21" y1="5" y2="5" stroke={color} strokeWidth="2" strokeDasharray={dash} />
-      {dot && <circle cx="11" cy="5" r="3.5" fill={color} stroke="#031b26" strokeWidth="1.5" />}
+      {dot && <circle cx="11" cy="5" r="3.5" fill={color} stroke="#0a3240" strokeWidth="1.5" />}
     </svg>
   )
 }

@@ -49,6 +49,10 @@ Spots are **config-driven**, so more can be added later without code changes.
 - Work **one step at a time**.
 - **Ask before** adding libraries or features that aren't listed here.
 - After each task, tell me exactly how to run and test it.
+- **Keep my laptop light**: nothing scheduled or left running locally (GitHub Actions does the
+  hourly/nightly work). Heavy libraries (ultralytics/YOLO, torch, anything big) go in a separate
+  requirements file installed **only inside GitHub Actions**, never in `jobs/requirements.txt`
+  and never installed locally. `clean.ps1` frees rebuildable space (asks first).
 - Keep the **Status** section below up to date with what's done.
 
 ## Status
@@ -463,6 +467,36 @@ Spots are **config-driven**, so more can be added later without code changes.
     same-device duplicate excluded), AI closer 3 / forecast 1 / tie 1 (4.5 counts as 5; :20/:40
     round to the nearest hour); `p_days` 999 -> 60; inactive spot -> not active;
     `train.insert_model_row` wrote n_ratings/n_spots/scope.
+- [x] Step 24 (2026-11-22): app redesign built from the chosen mockup ("A final" on the design
+  canvas https://claude.ai/artifact/54XbAZFVxhvnrzmuCSknWE, EPIC changed to purple).
+  - Colours (`index.css`): page `sea` #0d3d4c (lighter than the old #031b26), cards `card`
+    #134b5c, borders `line`, `mist` lightened to #a9c8cf (contrast on cards). Scores say what to
+    do: s1 coral SKIP, s2 sand MAYBE, s3/s4 greens GO, s5 **purple #8b5cf6 EPIC** (white text +
+    glow). Shared in `ScoreChip.tsx` (`SCORE_CLASS`, `SCORE_WORD`, `ScoreBadge`); rating form
+    and /admin use it too. `index.html` boot colours, theme-color and manifest updated.
+  - Sections: Right now (`Verdict.tsx`: big GO/MAYBE/SKIP + wave line, score, label + pill, AI
+    chip + forecast alone, reason, learned-from, 2x2: waves, **wave power**, wind with
+    Offshore/Cross-shore/Onshore tag, tide value + trend + **small tide curve**) → Surfers today
+    (`TodayReports.tsx`, now always shown with the rate button inside) → Today
+    (`DayPlan.tsx` `TodayCard`: dawn / 10h / now or 13h / 16h / last daylight hour, each with
+    score, height, power bars, wind arrow + tag; "See every hour") → Next days (`NextDays`: best
+    window, height, power word, wind tag, score + SKIP/MAYBE/GO/EPIC; tap opens that day) → Who
+    called it (`ForecastVsSurfers.tsx` restyled; scoreboard when a model is active; chart colours
+    kept, re-validated on the new card colour).
+  - Hour by hour: `HourSheet.tsx` (lazy, bottom sheet like the rating form): day tabs, a table
+    row per daylight hour + one after sunset (dimmed): score, waves + period, power (brighter =
+    stronger), wind arrow + speed + off/cross/on. Escape / Done close it; focus returns.
+  - `lib/conditions.ts`: `wavePower` = 0.49 × H² × T kW/m (weak < 2, medium 2-5, strong 5-10,
+    heavy 10+; deep-water estimate, real nearshore power is lower) and `windInfo` (relation,
+    labels, colours, arrow rotation). `Glyphs.tsx`: `WindArrow`, `PowerMeter`, `TideMini`.
+  - Removed (replaced): `ConditionsPanel`, `WaveScene`, `WindDial`, `HourStrip`, `HourList`,
+    `TideCurve`, `DirectionArrow`, App's `DayTabs`. Main JS 361 → 296 KB.
+  - **Not built: the live cam tile** (Windy terms for public display + our snapshots are in a
+    private bucket; needs a decision).
+  - Checked in the dev app at phone size: real forecast (SKIP coral, MAYBE sand), hour sheet
+    (tabs, Escape, Done, focus back, day rows open their day), rating form colours; AI state
+    with stubbed predictions + model info (EPIC purple, Who called it scoreboard; stubs removed
+    from that browser). `tsc` + build pass. Not committed; bump `web/package.json` on release.
 - [x] Released 2026-11-22: steps 12-22 committed on `test-preview` (5 commits, secret scan
   clean), `main` fast-forwarded to it and pushed (`main` = `test-preview` = 75d523c). Vercel
   deploys production from `main`; the hourly (:17) and nightly (03:23 UTC) schedules are now
@@ -478,6 +512,31 @@ Spots are **config-driven**, so more can be added later without code changes.
     `ADMIN_PASSWORD` present, production redeployed; **/admin login confirmed working**.
 - [ ] Before printing posters: pick the main address (see open items) and fill `CONTACT` in
   `PrivacyPage.tsx`.
+- [x] Step 23 (2026-11-22): laptop footprint check (nothing deleted).
+  - No scheduled task, Startup entry or Run key for the old `run_all.py` (it was never
+    scheduled). Found 3 forgotten local dev servers (`npm --prefix web run dev`, started 21 Nov
+    from earlier sessions); stopped with my OK (npm wrappers + 3 vite processes, ports
+    5173-5175 free; no surf-app node/python process left).
+  - Old SQLite `C:\Users\pages\surf-app-data\surf.db` (172 KB; `snapshots` folder empty,
+    `logs\collector.log`) vs Supabase: the 3 Vilanova past sessions + their forecasts are in
+    Supabase (ratings 32-34 + 72 historical rows). Only local: **80 buoy readings** (1731 + 2720,
+    18 Nov 21:00 - 20 Nov 12:00 UTC; PORTUS can't give them again), one live forecast run
+    fetched 20 Nov (151 rows), the Bogatell report (rating 4 + 56 forecast rows; skipped on
+    purpose in step 16; its source files are in `my_old_data/`), the `collector_runs` log.
+    Decided 2026-11-22: **not** copied to Supabase (not needed), so `surf-app-data` is safe to
+    delete whenever I want (it is not deleted yet).
+  - Local Python (3.10 main install): no torch, ultralytics or xgboost. scikit-learn/scipy/
+    numpy/joblib (~200 MB) are there for running train/predict locally. TensorFlow (1.3 GB) and
+    OpenCV (121 MB) are installed too but not used by this project.
+  - Project 221 MB: `web/node_modules` 193 MB, `.venv` 18 MB (empty: only pip/setuptools, made
+    20 Nov, unused), `my_old_data` 4.6 MB, `lighthouse-reports` 2.4 MB, `web/dist` 1 MB. Outside:
+    pip cache 1.0 GB, npm cache 1.0 GB. The project is inside OneDrive, so `node_modules`
+    (thousands of files) is also synced to the cloud.
+  - `clean.ps1` (repo root): lists rebuildable folders (`web/node_modules`, `web/dist`, `.venv`,
+    `__pycache__`, `.pytest_cache`, `explore_out`, `lighthouse-reports`) with sizes and asks
+    y/N before deleting; `-DryRun` only lists; `-GlobalCaches` adds the pip + npm caches. Never
+    touches code, `.env`, `my_old_data`, `web/share-kit`, `.git`. Tested: dry run and "n" delete
+    nothing.
 - [ ] Open items:
   - **Pick the main address**: `SITE_URL` (QR poster, `/rate` link, canonical, `og:url`,
     `og:image`) is `surfwithai.vercel.app`, which only 307-redirects to the production address
@@ -526,7 +585,8 @@ Spots are **config-driven**, so more can be added later without code changes.
     has no wind.
   - `near_beach` and `device_id` are self-reported, so don't trust them blindly in training.
   - Crowd counting **deferred** (Vilanova's 400x224 cam images are too small). When built:
-    `ultralytics` pulls a large CUDA `torch` by default; install the CPU build in Actions.
+    `ultralytics` pulls a large CUDA `torch` by default; install the CPU build, from its own
+    requirements file, **only in Actions** (never on my laptop).
   - The collectors use only the standard library; training needs `jobs/requirements.txt` (pinned
     scikit-learn etc.; `train.yml` installs it). Keep the pins equal wherever models are loaded.
   - No automated tests for `jobs/` (tested by hand with dry runs and forced failures).

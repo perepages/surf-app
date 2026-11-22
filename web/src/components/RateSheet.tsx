@@ -20,8 +20,9 @@ import { NEAR_BEACH_KM, checkNearBeach, type NearBeachResult } from '../lib/near
 import type { Forecast } from '../lib/openMeteo'
 import type { Spot } from '../lib/spot'
 import { SCORE_LABELS, type Score, type ScoreValue } from '../scoring/types'
+import { SCORE_CLASS } from './ScoreChip'
 
-const SCORE_BG = ['', 'bg-s1 text-foam', 'bg-s2 text-foam', 'bg-s3 text-abyss', 'bg-s4 text-abyss', 'bg-s5 text-abyss']
+const SCORE_BG = SCORE_CLASS as Record<number, string>
 
 interface Props {
   open: boolean

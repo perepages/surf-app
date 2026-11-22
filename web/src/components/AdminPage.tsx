@@ -1,5 +1,6 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { CROWDS, SURFACES, WAVE_SIZES } from '../lib/ratings'
+import { SCORE_CLASS } from './ScoreChip'
 
 // /admin: usage counts and the latest ratings, with a button to hide spam.
 // The password is checked by the server (api/admin.ts); this page only holds it in memory
@@ -37,7 +38,7 @@ interface Summary {
   ratingsCapped?: boolean
 }
 
-const SCORE_BG = ['', 'bg-s1 text-foam', 'bg-s2 text-foam', 'bg-s3 text-abyss', 'bg-s4 text-abyss', 'bg-s5 text-abyss']
+const SCORE_BG = SCORE_CLASS as Record<number, string>
 
 async function callAdmin<T>(password: string, body: object): Promise<T> {
   const res = await fetch('/api/admin', {

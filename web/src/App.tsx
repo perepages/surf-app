@@ -1,31 +1,28 @@
 import { LazyMotion, MotionConfig } from 'framer-motion'
-import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ConditionsPanel } from './components/ConditionsPanel'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { NextDays, TodayCard } from './components/DayPlan'
 import { ErrorBoundary, SectionFailed } from './components/ErrorBoundary'
-import { HourList } from './components/HourList'
-import { HourStrip } from './components/HourStrip'
-import { TideCurve } from './components/TideCurve'
 import { TodayReports } from './components/TodayReports'
 import { buildChartRows } from './lib/chartData'
 import { CHART_DAYS, useReports, type ReportsState } from './lib/reports'
 import { learnedFrom, useModelInfo, type ModelInfo } from './lib/modelInfo'
 import { Verdict } from './components/Verdict'
-import { dayOfMonth, hhmm, localDate, weekday } from './lib/format'
-import type { ForecastDay, HourConditions } from './lib/openMeteo'
+import { hhmm, localDate } from './lib/format'
+import type { HourConditions } from './lib/openMeteo'
 import { DEFAULT_SPOT_ID } from './lib/spot'
 import { resolveScore } from './scoring/resolveScore'
 import type { Score } from './scoring/types'
 import { useNow, useOnline, useSpotForecast } from './useSpotForecast'
 
-const SCORE_BG = ['', 'bg-s1', 'bg-s2', 'bg-s3', 'bg-s4', 'bg-s5']
-
 const loadMotionFeatures = () => import('./motionFeatures').then((r) => r.default)
 
 // Loaded only when needed, so the first screen downloads and runs less JavaScript:
-// the chart (Recharts) when scrolled near, the rating form when opened, the privacy page when visited.
+// the chart (Recharts) when scrolled near, the rating form and hour-by-hour sheet when opened,
+// the privacy page when visited.
 const ForecastVsSurfers = lazy(() => import('./components/ForecastVsSurfers'))
 const RateSheet = lazy(() => import('./components/RateSheet').then((m) => ({ default: m.RateSheet })))
 const PrivacyPage = lazy(() => import('./components/PrivacyPage').then((m) => ({ default: m.PrivacyPage })))
+const HourSheet = lazy(() => import('./components/HourSheet').then((m) => ({ default: m.HourSheet })))
 
 /**
  * Renders children only once their placeholder comes within `margin` of the screen. Keeps the
@@ -175,40 +172,35 @@ function SpotScreen({ spot, forecast, stale, refreshing, ai, now, online, report
     return first <= 0 ? forecast.days : forecast.days.slice(first)
   }, [forecast, today])
   const allHours = useMemo(() => days.flatMap((d) => d.hours), [days])
-  const anyAi = useMemo(() => [...scores.values()].some((s) => s.source === 'ai'), [scores])
 
   // Current hour (or the closest one if the forecast is older/newer than now).
   const nowIdx = Math.max(0, allHours.findIndex((h) => now < h.time + 3600))
   const nowHour: HourConditions | undefined = allHours[nowIdx]
-  const todayIdx = Math.max(0, days.findIndex((d) => d.hours.some((h) => h.time === nowHour?.time)))
-
-  // Selected hour; null = follow "now" as the clock moves.
-  const [picked, setPicked] = useState<number | null>(null)
-  const selectedIdx = picked == null ? nowIdx : Math.max(0, allHours.findIndex((h) => h.time === picked))
-  const selHour = allHours[selectedIdx]
-  const nowTime = nowHour?.time
-  const selectHour = useCallback((t: number) => setPicked(t === nowTime ? null : t), [nowTime])
-  const dayIdx = Math.max(0, days.findIndex((d) => d.hours.some((h) => h.time === selHour?.time)))
-  const day = days[dayIdx]
-  const selectDay = useCallback(
-    (i: number) => {
-      if (i === todayIdx) return setPicked(null)
-      const d = days[i]
-      // First daylight hour with something to see, else the first hour.
-      setPicked((d.hours.find((h) => h.isDay) ?? d.hours[0]).time)
-    },
-    [days, todayIdx],
-  )
+  const todayDay = days.find((d) => d.hours.some((h) => h.time === nowHour?.time)) ?? days[0]
+  const nextDays = useMemo(() => days.filter((d) => d.date > (todayDay?.date ?? today)).slice(0, 3), [days, todayDay, today])
 
   // The short link /rate (the poster's QR code) opens the app with the rating form already up.
   const [rating, setRating] = useState(OPENED_TO_RATE)
-  // The form's code is downloaded on first open and then kept, so closing can animate.
+  // Sheets' code is downloaded on first open and then kept, so closing can animate.
   const [ratingLoaded, setRatingLoaded] = useState(OPENED_TO_RATE)
-  const openRating = () => {
+  const openRating = useCallback(() => {
     setRatingLoaded(true)
     setRating(true)
-  }
+  }, [])
   const closeRating = useCallback(() => setRating(false), [])
+
+  // Hour-by-hour sheet: index into [today, ...nextDays]; null = closed.
+  const sheetDays = useMemo(() => (todayDay ? [todayDay, ...nextDays] : nextDays), [todayDay, nextDays])
+  const [hoursDay, setHoursDay] = useState<number | null>(null)
+  const [hoursLoaded, setHoursLoaded] = useState(false)
+  const openHours = useCallback((i: number) => {
+    setHoursLoaded(true)
+    setHoursDay(i)
+  }, [])
+  const openToday = useCallback(() => openHours(0), [openHours])
+  const openNextDay = useCallback((i: number) => openHours(i + 1), [openHours])
+  const closeHours = useCallback(() => setHoursDay(null), [])
+
   const chartRows = useMemo(
     () => buildChartRows(forecast, spot, ai, reports.status === 'ready' ? reports.daily : [], today, CHART_DAYS),
     [forecast, spot, ai, reports, today],
@@ -219,133 +211,85 @@ function SpotScreen({ spot, forecast, stale, refreshing, ai, now, online, report
     return forecast.days.map((d) => d.sunrise).find((s): s is number => s != null && s > now) ?? null
   }, [forecast, nowHour, now])
 
+  const placeName = spot.name.match(/\((.*)\)/)?.[1]
+
   return (
-    <main>
-      <header className="flex items-baseline justify-between gap-4 px-4 pt-5 sm:px-8">
-        <span className="font-display text-xl font-extrabold">{spot.name.replace(/\s*\(.*\)\s*$/, '')}</span>
+    <main className="flex flex-col gap-3.5">
+      <header className="flex items-baseline justify-between gap-4 px-5 pt-5 pb-1 sm:px-8">
+        <div className="flex flex-col">
+          <span className="font-display text-[26px] font-extrabold">{spot.name.replace(/\s*\(.*\)\s*$/, '')}</span>
+          {placeName && <span className="text-[13px] text-mist">{placeName}</span>}
+        </div>
         <span className="text-xs text-mist">Updated {hhmm(Math.floor(forecast.fetchedAt / 1000), tz)}</span>
       </header>
 
       {!online ? (
-        <p role="status" className="mx-4 mt-3 rounded-lg border border-sand/40 px-3 py-2 text-sm text-sand sm:mx-8">
+        <p role="status" className="mx-4 rounded-lg border border-sand/40 px-3 py-2 text-sm text-sand sm:mx-8">
           You’re offline. This is the forecast saved at {hhmm(Math.floor(forecast.fetchedAt / 1000), tz)}.
         </p>
       ) : (
         stale &&
         !refreshing && (
-          <p role="status" className="mx-4 mt-3 rounded-lg border border-sand/40 px-3 py-2 text-sm text-sand sm:mx-8">
+          <p role="status" className="mx-4 rounded-lg border border-sand/40 px-3 py-2 text-sm text-sand sm:mx-8">
             Open-Meteo isn't answering. This is the forecast from {hhmm(Math.floor(forecast.fetchedAt / 1000), tz)}.
           </p>
         )
       )}
 
-      {nowHour && (
-        <Verdict score={scores.get(nowHour.time)!} timezone={tz} firstLight={firstLight} now={now} learnedFrom={learnedFrom(model)} />
+      {nowHour && todayDay && (
+        <Verdict
+          score={scores.get(nowHour.time)!}
+          hour={nowHour}
+          next={allHours[nowIdx + 1]}
+          dayHours={todayDay.hours}
+          spot={spot}
+          timezone={tz}
+          firstLight={firstLight}
+          now={now}
+          learnedFrom={learnedFrom(model)}
+        />
       )}
 
-      <div className="px-4 pb-10 sm:px-8">
-        <button
-          type="button"
-          onClick={openRating}
-          className="w-full rounded-2xl bg-foam px-5 py-4 text-left font-display text-3xl font-extrabold text-abyss transition-colors hover:bg-glass sm:w-auto"
-        >
-          I surfed — rate it
-          <span className="block font-sans text-sm font-medium text-abyss/70">Tell the forecast how it really was</span>
-        </button>
-      </div>
+      <TodayReports reports={reports} timezone={tz} onRate={openRating} />
       {ratingLoaded && (
         <ErrorBoundary name="Rating form" fallback={<SectionFailed what="the rating form" />}>
-        <Suspense fallback={null}>
-          <RateSheet open={rating} onClose={closeRating} spot={spot} forecast={forecast} scores={scores} now={now} onSent={onRatingSent} />
-        </Suspense>
+          <Suspense fallback={null}>
+            <RateSheet open={rating} onClose={closeRating} spot={spot} forecast={forecast} scores={scores} now={now} onSent={onRatingSent} />
+          </Suspense>
         </ErrorBoundary>
       )}
-      <TodayReports reports={reports} timezone={tz} />
 
       {/* Below the first screen: drawn when scrolled near, not at start-up. */}
-      {selHour && (
-        <WhenNear placeholder="h-[36rem]" margin="300px" what="the conditions for this hour">
-        <ConditionsPanel
-          spot={spot}
-          hour={selHour}
-          next={allHours[selectedIdx + 1]}
-          score={scores.get(selHour.time)!}
-          timezone={tz}
-          isNow={selHour.time === nowHour?.time}
-        />
+      {todayDay && (
+        <WhenNear placeholder="h-[26rem]" margin="300px" what="today's forecast">
+          <TodayCard day={todayDay} scores={scores} spot={spot} timezone={tz} now={now} onOpenHours={openToday} />
         </WhenNear>
       )}
-
-      <WhenNear placeholder="h-[90rem]" margin="300px" what="the hourly forecast">
-      <section aria-label="Hourly forecast" className="mt-8 px-4 sm:px-8">
-        <HourStrip hours={allHours} scores={scores} selected={selHour?.time ?? 0} onSelect={selectHour} timezone={tz} now={now} />
-        <div className="mt-4">
-          <DayTabs days={days} selected={dayIdx} onSelect={selectDay} scores={scores} tz={tz} todayIdx={todayIdx} />
-        </div>
-        <div className="mt-6 mb-5">
-          <TideCurve hours={day.hours} timezone={tz} now={now} selected={selHour?.time ?? now} />
-        </div>
-        <HourList spot={spot} hours={day.hours} scores={scores} timezone={tz} now={now} selected={selHour?.time ?? 0} />
-        <p className="mt-4 text-xs text-mist">
-          {anyAi
-            ? 'Hours with a yellow dot use the AI-corrected score, trained on surfers’ ratings.'
-            : 'Scores come from simple rules on wave size, period and wind. They will be corrected by AI once enough surfers rate real conditions.'}
-        </p>
-      </section>
+      <WhenNear placeholder="h-[24rem]" margin="300px" what="the next days">
+        <NextDays days={nextDays} scores={scores} spot={spot} timezone={tz} onOpenDay={openNextDay} />
       </WhenNear>
+      {hoursLoaded && (
+        <ErrorBoundary name="Hour by hour" fallback={<SectionFailed what="the hour-by-hour forecast" />}>
+          <Suspense fallback={null}>
+            <HourSheet
+              open={hoursDay != null}
+              onClose={closeHours}
+              days={sheetDays}
+              initialDay={hoursDay ?? 0}
+              scores={scores}
+              spot={spot}
+              timezone={tz}
+              now={now}
+            />
+          </Suspense>
+        </ErrorBoundary>
+      )}
 
       {chartRows.length > 1 && (
-        <WhenNear placeholder="h-[34rem]" margin="200px" what="the forecast vs surfers chart">
+        <WhenNear placeholder="h-[34rem]" margin="200px" what="who called it">
           <ForecastVsSurfers rows={chartRows} model={model} />
         </WhenNear>
       )}
     </main>
   )
 }
-
-const DayTabs = memo(function DayTabs({
-  days,
-  selected,
-  onSelect,
-  scores,
-  tz,
-  todayIdx,
-}: {
-  days: ForecastDay[]
-  selected: number
-  onSelect: (i: number) => void
-  scores: Map<number, Score>
-  tz: string
-  todayIdx: number
-}) {
-  return (
-    <div role="tablist" aria-label="Day" className="grid grid-cols-4 gap-2">
-      {days.map((d, i) => {
-        // Best daylight score of the day, so you can spot the good day at a glance.
-        const daylight = d.hours.filter((h) => h.isDay)
-        const best = Math.max(1, ...(daylight.length ? daylight : d.hours).map((h) => scores.get(h.time)?.value ?? 1))
-        const active = i === selected
-        const noon = d.hours[Math.floor(d.hours.length / 2)].time
-        return (
-          <button
-            key={d.date}
-            type="button"
-            role="tab"
-            aria-selected={active}
-            onClick={() => onSelect(i)}
-            className={`flex flex-col items-start rounded-lg border px-2.5 pt-1.5 pb-2 text-left transition-colors ${
-              active ? 'border-foam bg-deep' : 'border-kelp hover:border-mist'
-            }`}
-          >
-            <span className="text-sm text-mist">{i === todayIdx ? 'Today' : weekday(noon, tz)}</span>
-            <span className="font-display text-2xl leading-none font-extrabold">{dayOfMonth(noon, tz)}</span>
-            <span className="mt-2 flex w-full items-center gap-1.5" title={`Best score ${best}/5`}>
-              <span className={`h-1.5 rounded-full ${SCORE_BG[best]}`} style={{ width: `${best * 20}%` }} />
-              <span className="text-xs text-mist tabular-nums">{best}</span>
-            </span>
-          </button>
-        )
-      })}
-    </div>
-  )
-})

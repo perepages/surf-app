@@ -14,23 +14,30 @@
   font-display: swap;
 }
 
-/* Mediterranean at night: deep water, posidonia seagrass, foam, and three signal colours. */
+/* Mediterranean sea: deep teal water (lighter than night), foam, and signal colours.
+   Score colours say what to do: SKIP coral, MAYBE sand, GO greens, EPIC purple. */
 @theme {
   --color-abyss: #031b26;
   --color-deep: #072f3f;
+  --color-sea: #0d3d4c;
+  --color-card: #134b5c;
+  --color-line: #1f5e70;
   --color-kelp: #0f5257;
   --color-foam: #e6f2ee;
-  --color-mist: #8fb3bc;
+  --color-mist: #a9c8cf;
   --color-glass: #5fe3c0;
   --color-sand: #f4c95d;
   --color-coral: #ff7a66;
+  --color-coral-text: #ff9f8f;
+  --color-epic: #8b5cf6;
+  --color-epic-soft: #c4b5fd;
 
-  /* Score scale 1-5, from dull water to bright foam */
-  --color-s1: #24434f;
-  --color-s2: #2f6f78;
+  /* Score scale 1-5: flat (skip), small (maybe), fun, good (go), epic */
+  --color-s1: #ff7a66;
+  --color-s2: #f4c95d;
   --color-s3: #3fa79a;
   --color-s4: #5fe3c0;
-  --color-s5: #c9ffec;
+  --color-s5: #8b5cf6;
 
   --font-display: 'Big Shoulders Display', 'Arial Narrow', Impact, sans-serif;
   --font-sans: 'Familjen Grotesk', ui-sans-serif, system-ui, sans-serif;
@@ -43,7 +50,7 @@
 html,
 body {
   margin: 0;
-  background: var(--color-abyss);
+  background: var(--color-sea);
   color: var(--color-foam);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
