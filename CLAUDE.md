@@ -404,7 +404,7 @@ Spots are **config-driven**, so more can be added later without code changes.
     simple-only rows. With a real (synthetic) model saved via `train.save` + activated: predict
     --dry-run used it (85 of 97 hours changed, reasons + heights), train compared against it.
 - [x] Step 20 (2026-11-22): reason text from the model, `jobs/reasons.py` (used by `predict.py`,
-  shown in the app under the score: `Verdict.tsx`, and `ConditionsPanel.tsx` for other hours).
+  shown in the app under the score: `Verdict.tsx` (for the current hour since the step 24 redesign).
   Exact group Shapley values (SHAP's math, no `shap` library): 6 groups (wind, swell, waves,
   tide, time of day, season; lead time and the simple score stay fixed), 2^6 = 64 model calls
   per hour with left-out groups at their training median; they add up exactly to correction(hour)
@@ -511,6 +511,29 @@ Spots are **config-driven**, so more can be added later without code changes.
     "Nightly train" dry run green. Both scheduled workflows are **enabled** and running.
   - Vercel: `SUPABASE_SERVICE_ROLE_KEY` updated (Production + Preview), `SUPABASE_URL` and
     `ADMIN_PASSWORD` present, production redeployed; **/admin login confirmed working**.
+- [x] Review of steps 17-24 (2026-11-22): no keys, passwords or `.env` in any file or commit on
+  any branch (checked by value for the service key, Windy key and admin password, and by
+  pattern for `sb_secret_` / JWT keys). Python simple score still matches `simpleScore.ts`.
+  Fixed (unattended runs):
+  - **A network blip at 03:23 could replace a better model**: if downloading the current active
+    model failed, `train.py` treated it as "unloadable" and activated any new model that beat the
+    simple score. Model files are now downloaded with 3 tries (`download()`, network/429/5xx);
+    if that still fails the current model is **kept**. Only a real failure (404 = file gone,
+    can't unpickle) counts as unloadable.
+  - **A model crashing on a new forecast stopped the whole predictions write** for that spot,
+    leaving the previous hour's AI scores in place. `predict.py` now writes the simple-score rows
+    anyway (AI columns null, step red); if only the reason text fails, the AI scores are still
+    written without reasons (warning).
+  - **`train.py` crashed on a rating with `forecast_shown` = null** (`.get` on None), failing the
+    whole spot. Now treated as "nothing shown".
+  - `predict.py` warns when the newest stored forecast run is > 3 h old (`STALE_AFTER_H`), so a
+    failing or silent collector shows up in the predictions step too.
+  Tested by forcing each failure (crashing model, crashing reasons, 503 x3 -> kept, 404 ->
+  unloadable, null forecast_shown) and with live dry runs of train + predict; `tsc` passes.
+  **Found while testing: no scheduled run has started yet.** Both workflows are enabled and the
+  cron is on `main`, but at 17:20 UTC the only runs were the manual ones from 13:51-13:56; the
+  newest stored forecast was from 13:00. GitHub sends no email when a run never starts.
+  App (steps 22-24) reviewed: no crash paths found beyond the open items below.
 - [ ] Before printing posters: pick the main address (see open items) and fill `CONTACT` in
   `PrivacyPage.tsx`.
 - [x] Step 23 (2026-11-22): laptop footprint check (nothing deleted).
@@ -544,9 +567,6 @@ Spots are **config-driven**, so more can be added later without code changes.
     `isitworthsurf.vercel.app`. Either make `surfwithai` the production domain in Vercel
     (Settings > Domains) or change `src/lib/site.ts` and re-run `npm run share-kit` before
     printing posters. Some link-preview crawlers don't follow redirects for `og:image`.
-  - Vercel env for **Production** too: `ADMIN_PASSWORD`, `SUPABASE_URL`,
-    `SUPABASE_SERVICE_ROLE_KEY` (else `/admin` says "Admin is off" after the merge). Confirm a
-    real login on the preview after the body-password fix.
   - `/rate` opens the form only once the forecast has loaded; if Open-Meteo fails and there's no
     saved copy, the error screen shows and the form doesn't open.
   - Anyone with the public key can call `count_event` and inflate visits/installs.
@@ -567,8 +587,20 @@ Spots are **config-driven**, so more can be added later without code changes.
   - Bump `web/package.json` version on releases: it's the `app_version` stored with ratings
     (the service worker cache updates on its own from file hashes).
   - No automated tests and no ESLint config in `web/` (type-check only: `npx tsc -b`).
-  - **First unattended runs not seen yet**: PORTUS may block or slow GitHub's (US) servers;
-    Windy/Open-Meteo untested from there too. Check the first day of runs.
+  - **Scheduled runs not seen yet** (see the review of steps 17-24): check Actions > Hourly
+    collect for runs marked "schedule". If none appear, disable + re-enable the workflow
+    or push a commit that touches it. Manual runs from GitHub worked (PORTUS, Windy and
+    Open-Meteo all answered GitHub's servers on 2026-11-22).
+  - **No alert when runs silently stop** (GitHub only emails failed runs). Idea: show "last
+    forecast stored" in `/admin`, or a free uptime pinger on a tiny status endpoint.
+  - Hourly predict (collect, :17) and the nightly one (03:23) are in different concurrency
+    groups. On the rare night the 03:17 run ends after the nightly run, it writes one hour of
+    predictions from the previous model (fixed by the next hourly run).
+  - **`models` storage growth**: once a spot has enough ratings, every night saves a new
+    `.joblib` + `.json` + `models` row, even when the model is not activated; nothing is ever
+    deleted. Add pruning (e.g. inactive models > 30 days) before the 1 GB free storage matters.
+  - The 4th day in Next days / Hour by hour mixes AI hours (up to 72 h ahead) with simple-score
+    hours after that.
   - A broken collector fails **every hour**, and GitHub emails each failed scheduled run: fix
     or disable the workflow quickly (Actions > Hourly collect > ... > Disable workflow).
   - Supabase free projects **pause after ~7 days without activity**; the hourly job keeps it

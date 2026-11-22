@@ -45,7 +45,8 @@ For every active spot (or --spot ID):
          last 14 days, so comparing on those would always favour it. Fewer than --min-test such
          ratings = not enough new evidence = keep the current model.
      Otherwise the old model stays active. A current model that can't be loaded (e.g. made by
-     another scikit-learn) is replaced if the new one beats the simple score.
+     another scikit-learn, or its file is gone) is replaced if the new one beats the simple
+     score; one that can't be DOWNLOADED (network, Supabase busy, after 3 tries) is kept.
   7. General model: spots with too few ratings for their own model (step 4) get one model
      trained on the ratings of ALL spots (features are relative to each beach, so they pool).
      It's evaluated the same way on all spots' last 14 days, saved once in models/general/,
@@ -70,9 +71,12 @@ import json
 import math
 import os
 import sys
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from http.client import HTTPException
 from typing import Any
 
 # joblib asks Windows for the physical core count via a tool newer Windows lacks; that only
@@ -243,7 +247,8 @@ def build_dataset(db: Supabase, spot: Row) -> list[Row]:
             for k, v in db_fc.items():
                 if cond.get(k) is None:
                     cond[k] = v
-            if lead is None and not r.get("forecast_shown", {}).get("hours"):
+            shown = r.get("forecast_shown")  # null for some sources: no copy of what was seen
+            if lead is None and not (isinstance(shown, dict) and shown.get("hours")):
                 lead = db_fc.get("lead_hours")  # nothing was shown: the stored forecast's lead
         if cond.get("wave_height") is None and cond.get("swell_wave_height") is None:
             continue  # no forecast at all for this hour: nothing to learn from
@@ -372,12 +377,35 @@ def storage_url(db: Supabase) -> str:
     return db.base.replace("/rest/v1", "/storage/v1")
 
 
+class DownloadError(Exception):
+    """The model file couldn't be fetched (network, Supabase busy): says nothing about the model."""
+
+
+DOWNLOAD_ATTEMPTS = 3
+
+
+def download(db: Supabase, path: str) -> bytes:
+    """A file from the private bucket, retrying network errors / 429 / 5xx. A 4xx (e.g. the
+    file is gone) raises HTTPError at once: that model really can't be used."""
+    url = f"{storage_url(db)}/object/{BUCKET}/{urllib.parse.quote(path)}"
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=db.headers), timeout=60) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as exc:
+            if exc.code != 429 and exc.code < 500:
+                raise
+            error: Exception = exc
+        except (OSError, HTTPException) as exc:  # timeouts, resets, DNS
+            error = exc
+        if attempt < DOWNLOAD_ATTEMPTS:
+            time.sleep(2 ** attempt)
+    raise DownloadError(f"{type(error).__name__}: {error}")
+
+
 def load_bundle(db: Supabase, path: str) -> Row:
     """Download and unpickle a model file. Only ever from our private bucket (pickles run code)."""
-    req = urllib.request.Request(f"{storage_url(db)}/object/{BUCKET}/{urllib.parse.quote(path)}",
-                                 headers=db.headers)
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        return joblib.load(io.BytesIO(resp.read()))
+    return joblib.load(io.BytesIO(download(db, path)))
 
 
 def active_model(db: Supabase, spot_id: str) -> Row | None:
@@ -404,6 +432,10 @@ def decide(db: Supabase, spot_id: str, candidate: HistGradientBoostingRegressor,
     out["current_version"] = current["version"]
     try:
         bundle = load_bundle(db, current["artifact_path"])
+    except DownloadError as exc:
+        # A network blip must not swap out a good model: keep it, try again tomorrow night.
+        out["current_error"] = str(exc)
+        return done(False, "couldn't download the current model to compare; keeping it")
     except Exception as exc:  # unusable current model: predict.py can't use it either
         out["current_error"] = f"{type(exc).__name__}: {exc}"
         return done(beats_simple, "current model can't be loaded; "

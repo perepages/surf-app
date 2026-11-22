@@ -6,6 +6,9 @@ name: Hourly collect
 # and the whole run is then marked failed so GitHub emails you.
 # Where to look: Actions tab > "Hourly collect" > a run. The Summary page lists each
 # collector's result and any warnings/errors; click a step for its full log.
+# GitHub emails only FAILED runs: if scheduled runs stop appearing at all (GitHub can delay
+# or drop schedules, and disables them after 60 days without commits), nobody is told. The
+# predictions step warns when the newest stored forecast is over 3 h old.
 
 on:
   # The "Run workflow" button (Actions tab > Hourly collect).

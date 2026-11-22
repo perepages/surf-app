@@ -46,7 +46,8 @@ UTC = timezone.utc
 Row = dict[str, Any]
 UPSERT_BATCH = 500
 PREDICT_HOURS = 72  # the next 3 days; rows further ahead are deleted each run
-FORECAST_COLS = ("valid_at,lead_hours,marine_model,wave_height,wave_period,wave_direction,"
+STALE_AFTER_H = 3   # warn when the newest stored forecast run is older than this
+FORECAST_COLS = ("fetched_at,valid_at,lead_hours,marine_model,wave_height,wave_period,wave_direction,"
                  "swell_wave_height,swell_wave_period,swell_wave_direction,sea_level_height,"
                  "wind_speed,wind_direction")
 
@@ -85,11 +86,18 @@ def build(spot: Row, forecast: list[Row], bundle: Row | None, now: datetime) -> 
     overall, height = bundle.get("overall"), bundle.get("wave_height")
     ref = bundle.get("reference") or {}
     accuracy = (bundle.get("metrics") or {}).get("accuracy")
+    # A model that breaks here (e.g. odd values in a new forecast) must not stop the simple
+    # scores being written: the caller catches this and writes `out` as it is.
     ai = predict(overall, rows) if overall is not None else [None] * len(rows)
     with_h = [i for i, r in enumerate(rows) if r["forecast_height"] is not None]
     heights = dict(zip(with_h, predict(height, [rows[i] for i in with_h]))) if height is not None and with_h else {}
-    why = (reasons(overall, rows, [float(a) for a in ai], ref, conds, spot["beach_orientation"],
-                   shown_value) if overall is not None else [None] * len(rows))
+    try:
+        why = (reasons(overall, rows, [float(a) for a in ai], ref, conds, spot["beach_orientation"],
+                       shown_value) if overall is not None else [None] * len(rows))
+    except Exception as exc:  # the scores are still right; the app shows the simple reason
+        log.warn(JOB, f"[{spot['id']}] reasons failed ({type(exc).__name__}: {exc}); AI scores "
+                      "written without them")
+        why = [None] * len(rows)
     for i, o in enumerate(out):
         if ai[i] is None:
             continue
@@ -105,10 +113,16 @@ def build(spot: Row, forecast: list[Row], bundle: Row | None, now: datetime) -> 
 
 def predict_spot(db: Supabase, spot: Row, args: argparse.Namespace, now: datetime) -> bool:
     until = now + timedelta(hours=args.hours)
-    forecast = [f for f in latest_run(db, spot["id"]) if ts(f["valid_at"]) <= until]
+    run = latest_run(db, spot["id"])
+    forecast = [f for f in run if ts(f["valid_at"]) <= until]
     if not forecast:
         log.warn(JOB, f"[{spot['id']}] no live forecast stored yet; nothing to predict")
         return True
+    fetched = ts(forecast[0]["fetched_at"])
+    if now - fetched > timedelta(hours=STALE_AFTER_H):
+        # The forecast collector has been failing: say so here too (it's the step people see).
+        log.warn(JOB, f"[{spot['id']}] newest stored forecast is from {iso(fetched)} "
+                      f"({(now - fetched).total_seconds() / 3600:.0f} h old); check the forecast step")
     ok, bundle, source = True, None, "no active model: simple score only"
     if args.model_file:
         bundle, source = joblib.load(args.model_file), f"local file {args.model_file}"
@@ -123,7 +137,17 @@ def predict_spot(db: Supabase, spot: Row, args: argparse.Namespace, now: datetim
                 source = f"model {current['version']} unloadable: simple score only"
                 log.fail(JOB, f"[{spot['id']}] active model {current['version']} can't be loaded "
                               f"({type(exc).__name__}: {exc}); writing the simple score only")
-    rows = build(spot, forecast, bundle, now)
+    try:
+        rows = build(spot, forecast, bundle, now)
+    except Exception as exc:
+        if not bundle:
+            raise
+        # Write the simple score anyway (AI columns null), so the app never shows an AI score
+        # from an older run next to a newer forecast.
+        ok, source = False, f"model {bundle.get('version')} failed: simple score only"
+        log.fail(JOB, f"[{spot['id']}] the active model failed on this forecast "
+                      f"({type(exc).__name__}: {exc}); writing the simple score only")
+        rows = build(spot, forecast, None, now)
     for r in rows[:args.show]:
         print(f"        {r['valid_at']} simple {r['simple_score']} ai {r['ai_score']} "
               f"height {r['ai_wave_height']} | {r['reason'] or ''}")
