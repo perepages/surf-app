@@ -32,3 +32,6 @@ Thumbs.db
 
 # Lighthouse reports (regenerate any time)
 lighthouse-reports/
+
+# Exploration outputs (contain raw PORTUS buoy data: never publish)
+explore_out/
