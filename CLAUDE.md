@@ -631,6 +631,12 @@ Spots are **config-driven**, so more can be added later without code changes.
   and pushed; Vercel deploys production from `main`). At release: migration 13 not applied and
   the VAPID secrets/Vercel variable not set yet, so alerts show "not switched on" / can't be
   saved and the hourly alerts step is skipped until then.
+- [x] Fix 2026-11-22 (after the 0.4.0 release): turning on an alert showed "Unexpected end of JSON
+  input" although the alert WAS saved: `push_subscribe` returns nothing (HTTP 204, empty body)
+  and `rpc()` in `lib/supabase.ts` always parsed JSON. `rpc()` now returns null for an empty
+  body. Checked with headless Chrome on the prod build against the live database: on -> "Done",
+  button "Alert 4+", off -> row deleted. Migration 13 and the Vercel public key confirmed live
+  (bundle has the key; functions answer; fake endpoint refused; table not readable publicly).
 - [ ] Before printing posters: pick the main address (see open items) and fill `CONTACT` in
   `PrivacyPage.tsx`.
 - [x] Step 23 (2026-11-22): laptop footprint check (nothing deleted).

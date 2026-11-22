@@ -67,6 +67,8 @@ export async function rpc<T>(fn: string, args: Record<string, unknown>, signal?:
       signal: s,
     })
     if (!res.ok) throw new Error(`Supabase ${fn}: HTTP ${res.status}`)
-    return (await res.json()) as T
+    // Functions that return nothing (e.g. push_subscribe) answer 204 with an empty body.
+    const text = await res.text()
+    return (text ? JSON.parse(text) : null) as T
   })
 }
