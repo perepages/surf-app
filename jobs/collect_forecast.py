@@ -10,6 +10,9 @@ and writes one row per (spot, fetched_at, valid_at) for valid_at = the fetch hou
                That is what lets training compare forecasts made 1, 3, 24 and 72 h ahead.
   valid_at   = the UTC hour the row predicts.
 
+Thinning: after storing, runs fetched more than 14 days ago keep only leads 0, 1, 2, 3, 6, 12,
+24, 48, 72, 96 h (all spots; --no-thin skips it, --dry-run only counts). See KEEP_LEADS.
+
 No duplicates: the table is unique on (spot_id, fetched_at, valid_at) and rows are upserted,
 so running twice in the same hour overwrites that hour's rows with the newer numbers instead
 of adding copies.
@@ -78,6 +81,12 @@ FORECAST_DAYS = 5
 HTTP_TIMEOUT_S = 30
 ATTEMPTS = 3  # per request; waits 2 s, then 4 s, on network errors / 429 / 5xx
 UPSERT_BATCH = 500
+# Thinning (keeps the database inside the free 500 MB): runs fetched more than KEEP_ALL_DAYS ago
+# keep only these leads. ~97 -> 10 rows per run, ~200 -> ~20 MB per spot per year. Lead 0 stays,
+# so training still finds the best forecast for every past hour (and the historical rows from
+# import_past, which are lead 0); the other leads keep "how accuracy drops further ahead".
+KEEP_ALL_DAYS = 14
+KEEP_LEADS = (0, 1, 2, 3, 6, 12, 24, 48, 72, 96)
 
 
 # ---------- HTTP ----------
@@ -132,6 +141,31 @@ class Supabase:
     def active_spots(self) -> list[dict[str, Any]]:
         query = urllib.parse.urlencode({"select": "id,lat,lon", "active": "eq.true", "order": "id"})
         return http(f"{self.base}/spots?{query}", self.headers)
+
+    def thin_old_runs(self, older_than: datetime, delete: bool) -> int:
+        """Delete (or with delete=False only count) rows fetched before `older_than` whose lead
+        isn't in KEEP_LEADS, for every spot. Returns the number of rows."""
+        query = urllib.parse.urlencode({
+            "fetched_at": f"lt.{iso(older_than)}",
+            "lead_hours": f"not.in.({','.join(map(str, KEEP_LEADS))})",
+        })
+        method = "DELETE" if delete else "HEAD"
+        headers = {**self.headers, "Prefer": "count=exact,return=minimal"}
+        for attempt in range(1, ATTEMPTS + 1):
+            try:
+                req = urllib.request.Request(f"{self.base}/forecasts?{query}", headers=headers, method=method)
+                with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S * 4) as resp:
+                    total = (resp.headers.get("Content-Range") or "*/0").rsplit("/", 1)[-1]
+                    return int(total) if total.isdigit() else 0
+            except urllib.error.HTTPError as exc:
+                error: Exception = HttpError(exc.code, exc.read().decode("utf-8", "replace"))
+                if exc.code != 429 and exc.code < 500:
+                    raise error from None
+            except (OSError, HTTPException) as exc:
+                error = exc
+            if attempt < ATTEMPTS:
+                time.sleep(2 ** attempt)
+        raise error
 
     def upsert_forecasts(self, rows: list[dict[str, Any]]) -> None:
         url = f"{self.base}/forecasts?on_conflict=spot_id,fetched_at,valid_at"
@@ -261,6 +295,8 @@ def main() -> int:
                         help="fetch and print, don't write to Supabase")
     parser.add_argument("--show", type=int, default=0, metavar="N",
                         help="print the first N rows of each spot as JSON")
+    parser.add_argument("--no-thin", action="store_true",
+                        help=f"don't thin runs older than {KEEP_ALL_DAYS} days")
     args, _ = parser.parse_known_args()  # also run from jobs.collect with its flags
 
     load_dotenv(ROOT / ".env")
@@ -289,6 +325,17 @@ def main() -> int:
         except Exception as exc:  # one bad spot must not stop the others
             failed.append(spot["id"])
             log.fail(JOB, f"[{spot['id']}] {type(exc).__name__}: {exc}")
+
+    # Thin old runs. A failure here only warns: this hour's forecast is already stored, and the
+    # next hour tries again.
+    if not args.no_thin:
+        cutoff = fetched_at - timedelta(days=KEEP_ALL_DAYS)
+        try:
+            n = db.thin_old_runs(cutoff, delete=not args.dry_run)
+            log.ok(JOB, f"thinning: {'would delete' if args.dry_run else 'deleted'} {n} rows of runs "
+                        f"before {iso(cutoff)} (kept leads {', '.join(map(str, KEEP_LEADS))} h)")
+        except Exception as exc:
+            log.warn(JOB, f"thinning old runs failed ({type(exc).__name__}: {exc}); retried next hour")
 
     if failed:
         print(f"[{JOB}] failed spots: {', '.join(failed)}")

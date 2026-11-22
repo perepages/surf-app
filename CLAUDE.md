@@ -15,6 +15,13 @@ Spots are **config-driven**, so more can be added later without code changes.
 | Name | Lat | Lon |
 |------|-----|-----|
 | Vilanova i la Geltrú (Platja de Vilanova) | 41.2097 | 1.7128 |
+| Sitges | 41.2332 | 1.8125 |
+| Castelldefels | 41.2625 | 1.9855 |
+| Barceloneta (Barcelona) | 41.3782 | 2.1944 |
+| Bogatell (Barcelona) | 41.3935 | 2.2091 |
+
+Zones for future spots: zone 1 Garraf coast (El Prat later: no cam showing water;
+Garraf not recommended: no cam, no coastal wind station), zone 2 Barcelona.
 
 ## The loop
 1. The app shows the forecast: a simple 1-5 score from Open-Meteo until a trained model exists.
@@ -669,6 +676,69 @@ Spots are **config-driven**, so more can be added later without code changes.
   address -> alert re-saved on reopen, off -> row and endpoint key removed (no test rows left);
   cache cap kept the 6 newest. Live `notify --dry-run` OK. `tsc`, lint, build pass.
   **Not deployed yet** (on `test-preview`, not `main`).
+- [x] Step 28 (2026-11-22): 12-month backtest without surfers, `python -m jobs.backtest` (nothing
+  written to Supabase, live app untouched; `--offline` reuses the cache). Downloads 22 Nov 2025 -
+  21 Nov 2026 into `explore_out/backtest/raw/` (gitignored; has PORTUS data, never publish):
+  Open-Meteo archived Marine (+ GFS-wave fill) and Historical Forecast wind at the spot, Marine at
+  the buoy position as a control, **PORTUS buoy 1731 hourly history** (unofficial
+  `historicosSerialTime/estacion/WAVE/{id}` endpoint behind portus.puertos.es's time-series
+  charts; POST, one parameter per request, times UTC, checked against stored observations),
+  **Meteocat XEMA station YR Vilanova** (3.3 km, 10 m wind every 30 min, open-data dataset
+  `nzvn-apee`, no key). Observed score = same rules on buoy Hm0/Tp/dir + station wind. Model =
+  `train.fit`/`predict` with the observed score as the target, first 9 months train / last 3 test.
+  Results (4,375 daylight hours): same score 49%, within 1 point 82%, GO/not GO right 77%; said GO
+  but it wasn't 1% of hours, missed GO 22% (55% of GO hours); forecast 0.59 points low on average.
+  Beach forecast waves 0.20 m below the buoy, Open-Meteo at the buoy only 0.10 m low: half is
+  model error, half the beach being more sheltered (so the real missed-GO rate is lower). Wind
+  within 0.1 km/h on average. AI on the last 3 months: same score 46% -> 51%, miss 0.75 -> 0.60,
+  missed GO 23% -> 12%, but false GO 2% -> 6%. This model must not go live (it partly learned
+  "beach = buoy"). crowd_water: 2 snapshots, 0 counted, so that check isn't possible yet.
+- [x] Step 29 (2026-11-22): zone 1 + 2 spots. Scouted Garraf, Sitges, Castelldefels, El Prat,
+  Barceloneta, Bogatell (Windy cams checked by their daylight image, PORTUS buoys, Meteocat
+  stations with 10 m wind, orientation from the OSM coastline; Vilanova checks out at 162-166°).
+  Added live with `add_spot.py` (active): **sitges** (165°, cam 1701435626 = the beach up close),
+  **barceloneta** (130°, cam 1450823411 = wide view from a tower, beach water only 3% of the image),
+  **bogatell** (130°, no cam); all buoys 1731 + 2720. Points are ~150 m off the sand (on land
+  add_spot refuses them). Open-Meteo's nearest sea cell is 3.3 km (Sitges), 9.7 km (Barceloneta),
+  7.2 km (Bogatell) away. They show up in the app's spot list and map at once.
+  - Cam water area: migration `...0014_cam_water_area` (**not applied yet**: apply in the SQL
+    editor; it also stores the areas for vilanova/sitges/barceloneta; now applied): `spots.cam_water_area`
+    jsonb `{cam_id, points [[x,y] 0..1], image, drawn_at}`, checked by `valid_cam_area()`
+    (applied 2026-11-22 by me; checked: 3 areas stored, an invalid one refused);
+    ignored when `windy_cam_id` changes. `python -m jobs.cam_area --spot ID` writes
+    `explore_out/cam_areas/ID.html` (Windy daylight image + stored area in yellow; click to draw,
+    copy the `--save "x,y ..."` command); `--points` previews, `--save` stores, `--all`.
+    Helpers for the counting step: `area_for(spot)`, `inside(x, y, points)`, `share_of_image`.
+  - Backtest now per spot: `python -m jobs.backtest [--spot ID ...] [--station CODE]`, reports in
+    `explore_out/backtest/<spot>/`; station per spot in `STATIONS` (vilanova/sitges YR,
+    barceloneta/bogatell Y7 Port de Barcelona - Bocana Sud; the city station X4 is a rooftop).
+    Daylight hours, same score / GO right / said GO wrongly / missed GO, AI miss raw -> AI:
+    vilanova 49% / 77% / 1% / 22%, 0.75 -> 0.61; sitges 49% / 77% / 2% / 21%, 0.73 -> 0.61;
+    barceloneta 51% / 80% / 4% / 15%, 0.71 -> 0.57; bogatell 50% / 79% / 4% / 17%, 0.72 -> 0.58.
+    Open-Meteo is 0.10 m low at the buoy itself at every spot; the forecast wind at the
+    Barcelona spots is 6.6 km/h below the harbour-mouth station (exposed breakwater).
+  - Dry runs: collect_forecast, collect_buoy, collect_cam, train include all 4 spots; train puts
+    the 3 new ones (0 ratings) on the general model; predict waits for their first stored
+    forecast (next hourly run).
+  - Free limits: repo is public, so Actions minutes are unlimited (hourly run 0.7 min). Storage:
+    ~10 MB per cam for 60 days of snapshots. **Database is the limit**: ~200 MB/year/spot of
+    `forecasts`, 4 spots would reach 500 MB in ~7 months: fixed by step 30 (thinning).
+- [x] Step 30 (2026-11-22): forecast thinning (option "thin by lead time", chosen by me).
+  `collect_forecast.py`, after storing each hour: runs fetched more than `KEEP_ALL_DAYS` (14) days
+  ago keep only `KEEP_LEADS` 0, 1, 2, 3, 6, 12, 24, 48, 72, 96 h, for all spots (one PostgREST
+  DELETE with `count=exact`). ~97 -> 10 rows per run: ~200 -> ~20 MB/year/spot. Lead 0 stays, so
+  train/explore still find the best forecast for every past hour; historical past-session rows
+  (lead 0) untouched (72 still there). A thinning failure only warns (forecast already stored,
+  retried next hour); `--dry-run` only counts, `--no-thin` skips. Tested live with a throwaway
+  inactive spot (a 20-day-old run kept exactly the 10 leads, a 13-day-old run kept all 97; test
+  rows + spot deleted) and with a forced failure (warning, exit 0). That live run also stored the
+  21:00 UTC forecast for all 4 spots. **Runs on GitHub only once pushed to `main`.**
+- [x] Step 31 (2026-11-22): **castelldefels** added (Escola Catalana de Surf is there): 41.2625,
+  1.9855, faces 180°, **no cam** (the only one near, 1793912103, points at the sky), buoys 1731 +
+  2720, Open-Meteo sea cell 6.4 km away. Backtest station XL El Prat (11.7 km, 10 m wind; YY
+  Viladecans is closer but has only 2 m wind): same score 58%, GO right 81%, said GO wrongly 3%,
+  missed GO 17%; AI miss 0.61 -> 0.53. Dry runs: forecast, buoys and train include it (general
+  model). Committed with steps 28-31 on `test-preview` (not pushed).
 - [ ] Before printing posters: pick the main address (see open items) and fill `CONTACT` in
   `PrivacyPage.tsx`.
 - [x] Step 23 (2026-11-22): laptop footprint check (nothing deleted).
@@ -722,7 +792,9 @@ Spots are **config-driven**, so more can be added later without code changes.
   - Bump `web/package.json` version on releases: it's the `app_version` stored with ratings
     (the service worker cache updates on its own from file hashes).
   - No automated tests and no ESLint config in `web/` (type-check only: `npx tsc -b`).
-  - **Scheduled runs still never seen** (checked 18:19 UTC on 2026-11-22, after the 0.4.0 push
+  - **First scheduled "Hourly collect" run seen 2026-11-22 20:44 UTC** (success, 0.7 min; GitHub
+    starts schedules late, not at :17). Nightly not seen yet. Earlier note, kept for reference:
+    scheduled runs were never seen (checked 18:19 UTC on 2026-11-22, after the 0.4.0 push
     changed `collect.yml`): only manual runs in Actions, for both workflows. Without them there
     is no hourly data, no predictions and **no surf alerts**. Next: Actions > Hourly collect >
     "..." > Disable workflow, then Enable; if still nothing, trigger `workflow_dispatch` from an
@@ -756,10 +828,9 @@ Spots are **config-driven**, so more can be added later without code changes.
     awake once it runs from `main`.
   - GitHub **disables scheduled workflows after 60 days without commits**; re-enable in the
     Actions tab or keep committing.
-  - **`forecasts` growth**: 97 rows/hour/spot (lead 0-96 h) ~ 850k rows/year/spot, roughly
-    200 MB/year with indexes: Vilanova alone hits the 500 MB free tier in ~2 years, faster
-    with more spots. Decide a pruning rule (e.g. after 30 days keep only leads 0/1/3/6/12/24/
-    48/72/96, or only hours near ratings) and add it to the forecast job. No pruning yet.
+  - `forecasts` growth: thinned since step 30 (~20 MB/year/spot after 14 days + ~5 MB for the
+    last 14 days of full runs per spot); 500 MB holds roughly 15-20 spots for years.
+    `observations`, `predictions` and `snapshots` rows are small; recheck at ~20 spots.
   - Training notes: skip `ratings.hidden`; de-duplicate same device + surfed_at; rows with
     `marine_model = 'historical:best_match'` are lead-0 history, not live forecasts;
     `past_session` ratings keep the screenshot forecast in `forecast_shown.hours` (different
