@@ -496,7 +496,8 @@ Spots are **config-driven**, so more can be added later without code changes.
   - Checked in the dev app at phone size: real forecast (SKIP coral, MAYBE sand), hour sheet
     (tabs, Escape, Done, focus back, day rows open their day), rating form colours; AI state
     with stubbed predictions + model info (EPIC purple, Who called it scoreboard; stubs removed
-    from that browser). `tsc` + build pass. Not committed; bump `web/package.json` on release.
+    from that browser). `tsc` + build pass. **Released 2026-11-22** as app 0.3.0 (commit 3f46cee on
+    `main`, live on isitworthsurf.vercel.app ~40 s after the push; /, /rate, /admin answer 200).
 - [x] Released 2026-11-22: steps 12-22 committed on `test-preview` (5 commits, secret scan
   clean), `main` fast-forwarded to it and pushed (`main` = `test-preview` = 75d523c). Vercel
   deploys production from `main`; the hourly (:17) and nightly (03:23 UTC) schedules are now
