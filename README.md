@@ -17,13 +17,21 @@ surf-app/
 │   └── vite.config.ts    Vite config (React + Tailwind plugins; reads .env from repo root)
 ├── jobs/                 Python 3.11+ background jobs, run by GitHub Actions
 │   ├── collect.py        Hourly: forecast, tide, buoy, cam snapshot + crowd count
-│   ├── train.py          Nightly: retrain per spot, promote only if it beats the current model
+│   ├── collect_forecast.py  Hourly part 1: Open-Meteo forecast + tide -> `forecasts` (done)
+│   ├── collect_buoy.py   Hourly part 2: PORTUS buoys -> `observations` (training only)
+│   ├── collect_cam.py    Hourly part 3: Windy cam snapshot -> `snapshots` bucket + table
+│   ├── import_past.py    One-off: my past Vilanova sessions -> `ratings` + historical forecasts
+│   ├── explore.py        Local report: where the forecast is wrong (plots in explore_out/, never publish)
+│   ├── train.py          Nightly: retrain per spot (or a general model), test on the last 14 days,
+│   │                     activate only if it beats the current model and the simple score
+│   ├── predict.py        Hourly + nightly: simple + AI scores for the next 3 days -> `predictions`
+│   ├── reasons.py        Plain-words reason for each AI score (Shapley values per condition group)
 │   └── requirements.txt  Python dependencies for the jobs
 ├── supabase/
 │   └── migrations/       SQL migrations for the Supabase Postgres database (run in order)
 ├── .github/workflows/
-│   ├── collect.yml       Runs jobs/collect.py (hourly once enabled)
-│   └── train.yml         Runs jobs/train.py (nightly once enabled)
+│   ├── collect.yml       Hourly (:17 UTC) + manual: forecast, buoys, cam as separate steps
+│   └── train.yml         Nightly (03:23 UTC) + manual: train, then predictions
 ├── .env.example          Template of every env var; copy to .env (never committed)
 ├── .gitignore
 ├── CLAUDE.md             Project plan, rules and status
@@ -52,6 +60,8 @@ surf-app/
    pip install -r jobs/requirements.txt
    python -m jobs.collect
    ```
+   The forecast collector needs only the standard library (Python 3.10+):
+   `python -m jobs.collect_forecast --dry-run --show 2` prints without writing.
 
 ## Secrets
 

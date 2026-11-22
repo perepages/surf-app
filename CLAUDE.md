@@ -246,9 +246,226 @@ Spots are **config-driven**, so more can be added later without code changes.
   - `vercel.json`: `trailingSlash: false` (`/admin/`, `/rate/` redirect to the plain path) and
     `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy` on every path.
   Not fixed (listed below in open items).
+- [x] Step 12 (2026-11-22): `jobs/collect_forecast.py` (stdlib only, Python 3.10+; `jobs/collect.py`
+  now runs it, so the `collect.yml` workflow does too). For every `spots` row with `active = true`:
+  Open-Meteo Marine (wave height/period/direction, swell height/period/direction, wind wave
+  height, `sea_level_height_msl` -> `sea_level_height`) + Forecast (wind speed/direction/gusts
+  10 m, km/h). `fetched_at` = the UTC hour of the run (minutes cut), so `lead_hours` is a whole
+  number; rows for lead 0..96 h (`forecast_days=5`, so 96 h is reached at any hour). Upsert on
+  `(spot_id, fetched_at, valid_at)` = a rerun in the same hour overwrites, never duplicates
+  (checked live: two runs -> 97 rows; leads 1/3/24/72 present). Hours where `best_match` has a
+  null wave value take the whole wave set from `ncep_gfswave025` if that has fewer nulls
+  (`marine_model` says which; sea level is never replaced). If the API rejects sea level, waves
+  are still stored. Retries 3x on network/429/5xx; one failing spot doesn't stop the others
+  (exit 1). `--dry-run`, `--show N`. Fallback tested with faked nulls (GFS wave gives swell 0.0,
+  not null). Rows from the live test (fetched_at 2026-11-22 12:00 UTC) were kept. Hourly cron (`17 * * * *` UTC)
+  enabled in `collect.yml`, but GitHub runs schedules only from `main` and needs the 3 secrets. Not done: ~850k rows/year/spot (see `forecasts` growth item); no buoy/cam yet.
+- [x] Step 13 (2026-11-22): `jobs/collect_buoy.py` (stdlib only; `jobs/collect.py` runs it after
+  the forecast step; each step runs even if the other fails). Buoys from `spots.buoy_ids` of
+  active spots; chosen for Vilanova: **1731** Barcelona II (coastal, waves only, 42.5 km ENE) +
+  **2720** Tarragona (deep water, waves + wind, 61.3 km SSW). Also considered: 1712 Tarragona
+  coastal (46.5 km WSW, 15 m deep, waves only); nearest wind otherwise = Barcelona port met
+  stations (~40 km, sheltered). Uses the PORTUS map's unofficial JSON API (`lastData` +
+  `RTData`, POST, no key, ~48 hourly readings, times UTC). Columns: `wave_height` = Hm0,
+  `wave_period` = Tp, `wave_direction` = MeanDirPeak else MeanDir, `wind_speed` = WindSpeed
+  m/s x 3.6 = km/h, `wind_direction` = WindDir; faulty/empty = null. Upsert on
+  `(spot_id, buoy_id, observed_at)`: whole 48 h each run fills gaps, no duplicates (checked
+  live: two runs -> 47 + 48 rows, kept). Public key can't read `observations` (checked, 401).
+  Warns when a buoy's newest reading is > 6 h old. If PORTUS changes its API, only this file
+  breaks. Old SQLite `collector/buoy.py` left as is.
+- [x] Step 14 (2026-11-22): `jobs/collect_cam.py` (stdlib only; third step of `jobs/collect.py`).
+  Windy cams within 5 km of Vilanova: **1793884698** "Vilanova i la Geltru - North-west" (3Cat,
+  1.3 km, looks along the beach at the breakers) = **chosen**, saved in `spots.windy_cam_id`
+  (live, and migration `...0009_vilanova_cam` as a record); 1715343359 Avinguda de Rocacrespa
+  (2.1 km, rooftops, no sea). Each run per spot with a cam: skip outside sunrise - 20 min ..
+  sunset + 20 min (Open-Meteo daily sun times); Windy `webcams/{id}?include=images` -> download
+  the `preview` image at once (URL never stored); `taken_at` = Windy `lastUpdatedOn`, so an
+  un-updated cam isn't stored twice and an image > 2 h old is skipped; upload to the private
+  `snapshots` bucket as `<spot>/<YYYY-MM-DDTHHMMSSZ>.jpg` + `snapshots` row (crowd counts
+  empty, quality 'ok'). Cleanup: snapshots > 60 days old are deleted (file, then row), except
+  the single one nearest to each non-hidden rating of that spot within 2 h of `surfed_at`;
+  200 per spot per run. `--dry-run`, `--any-time`. Tested live: snapshot stored and downloaded
+  back, second run skipped (same image), public key refused on file and table; cleanup with
+  fake 70-day-old snapshots + a test rating + a hidden one kept only the right one (test data
+  deleted; the real first snapshot was kept). **Free Windy plan = 400x224 preview only**: too
+  small for YOLO to count surfers in the water (a few pixels each) at Vilanova.
+  ~12 KB/image x ~11 a day = ~8 MB per 60 days.
+  **Crowd counting stays in the plan** (decided 2026-11-22): build it as its own step anyway,
+  so it works for future spots whose cams show people clearly (or for Vilanova if a larger
+  image becomes available). It should decide per snapshot whether the image is usable for
+  counting (e.g. too small/dark -> leave `crowd_water`/`crowd_beach` empty and set `quality`),
+  not be hard-wired off or on per spot.
+- [x] Step 15 (2026-11-22): `.github/workflows/collect.yml` runs every collector hourly (cron
+  `17 * * * *` UTC, only from `main`) + "Run workflow" button with two options (dry run, cam at
+  night). Steps: "Check secrets are set" (names missing ones, never values), then "Forecast +
+  tide", "Buoys", "Cam snapshot + cleanup", each `python -m jobs.collect --only <step>` with
+  `if: !cancelled()`, so one failing collector turns only its step red, the rest still run,
+  and the run ends failed (GitHub emails the repo owner). Secrets `SUPABASE_URL`,
+  `SUPABASE_SERVICE_ROLE_KEY`, `WINDY_API_KEY` from repository secrets; inputs reach the shell
+  via env only. Logging: `jobs/log.py` (OK/WARN/FAIL lines; in Actions also `::warning`/`::error`
+  annotations and a per-step table on the run's Summary page). Fixed a bug found while testing:
+  `collect_forecast.http` shadowed the `http.client` module, so any network error crashed
+  instead of retrying (affected all three collectors). Tested locally with `GITHUB_ACTIONS=true`
+  (dry runs, a missing key, an unreachable Supabase); **not yet run on GitHub** (needs the
+  secrets and a push).
+- [x] Step 16 (2026-11-22): past sessions -> Supabase with `jobs/import_past.py` (one-off, stdlib,
+  idempotent; `--dry-run`). `my_old_data/` holds: 2 GFS27 surf-app screenshots of Vilanova
+  (2022-02-26, 2022-04-14), 2 WhatsApp photos (2023-11-12, no location/time in the files),
+  a Morocco (Tamraght) forecast 2023-12-28, and Bogatell surf-forecast.com/Surfline screenshots
+  + a 13 s video (2026-11-05). Imported only the 3 Vilanova sessions (Morocco + Bogatell
+  skipped, my choice): `ratings` rows 32-34, `source='past_session'`, overall 3 ("2.5 or 3"),
+  surfed_at 14:00 local (time unknown), no wave size noted; the screenshot numbers (wind
+  m/s -> km/h) are in `forecast_shown` (`kind: past_session_screenshot`, `seen_at` null),
+  2023-11-12 has `kind: past_session_no_forecast`. Open-Meteo for each local day: 72 rows in
+  `forecasts` with `marine_model = 'historical:best_match'` and `fetched_at = valid_at` (lead
+  0; the historical API stitches the first hours of each model run) -> **training must keep
+  these apart from live rows**. Sea level is null for the 2022 days. No buoy data for these
+  dates (PORTUS: manual request only). The old SQLite `collector/import_past.py` is superseded.
+- [x] Review of steps 12-16 (2026-11-22): no keys in any file or in git history on any branch
+  (checked by value: service key, Windy key, admin password); `.env`, `my_old_data/`,
+  `__pycache__` ignored. Fixed:
+  - **`import_past.py` could overwrite live forecasts**: its historical rows (fetched_at =
+    valid_at) share the key of the hourly job's lead-0 rows, and it upserted with merge. Now
+    `ignore-duplicates` (existing rows are never replaced). Re-run checked: still 72 rows.
+  - Forecast: a failed **wind** request lost the whole hour; now waves are stored with empty
+    wind + a warning.
+  - Buoys: one **malformed PORTUS reading** made the whole buoy fail; now it's skipped and
+    counted in a warning.
+  - Cam: if the **sun-times** request failed, no snapshot was taken; now it takes one anyway
+    with a warning (a dark image is cheap and pruned after 60 days).
+  - (Found while building step 15: `http` hid the `http.client` module, so network errors
+    crashed instead of retrying.)
+  Tested by forcing each failure. Not fixed: see open items (forecasts growth, hourly
+  failure emails, PORTUS from GitHub's servers untested, no automated tests for `jobs/`).
+- [x] Step 17 (2026-11-22): `jobs/explore.py` (stdlib only, nothing trained or written to
+  Supabase). Per spot: joins `forecasts` (shortest-lead live row, else historical, else
+  `--past-days N` (default 3) of Open-Meteo recent past fetched on the fly, not stored),
+  `observations` per buoy at the same hour, nearest `snapshots` crowd count (60 min), non-hidden
+  `ratings` (de-duplicated on device + surfed_at). Python copy of `simpleScore.ts` (keep in
+  sync). Writes `explore_out/<spot>/` (gitignored, has raw buoy data: never publish):
+  `report.html` + 4 hand-made SVGs (forecast vs buoy over time + scatter, simple score vs
+  rating, error by wind sector (calm < 10 km/h apart), error by sea-level thirds) + `hours.csv`,
+  `ratings.csv`; prints a plain-words summary. First run (2 days of buoys, 3 ratings): spot
+  forecast 0.08 m under buoy 1731 and 0.32 m under 2720; the big miss was the westerly wind
+  event on 22 Nov morning (2720 2.2 m vs 1.0 m forecast, its wind 41-52 km/h vs 28 forecast).
+  Open-Meteo `sea_level_height` sits at about -0.45..-0.62 m, so the "tide" groups only split a
+  ~15 cm range. Rating data far too thin to say anything about the score.
+- [x] Step 18 (2026-11-22): `jobs/train.py` (scikit-learn `HistGradientBoostingRegressor`, missing
+  values handled natively; no XGBoost). Per active spot: non-hidden ratings ("flagged" = hidden in
+  /admin), de-duplicated on device + surfed_at, weights me/past_session 1.0, community
+  near_beach 0.8, other community 0.5. Features from `forecast_shown` (app `conditions`, or the
+  screenshot hour nearest surfed_at), gaps filled from `forecasts`: swell height/period/direction
+  relative to the beach, wave height + simple score (added, not in the brief), wind speed +
+  onshore/cross components, tide, solar hour (UTC + lon/15, no time zones), month, lead hours.
+  Two models, each learning a **correction** to a baseline (so little data = stays near the
+  baseline): overall 1-5 (baseline simple score) and real wave height (rated size in metres,
+  e.g. waist 0.7 / head 1.6, else first buoy's Hm0; baseline forecast height). Test = most recent
+  20% of rated days (at least `--min-test`); needs 30 train / 10 test ratings, else the spot is
+  skipped (exit 0, the normal state now: 3 ratings). Saved model is refit on all rows, uploaded
+  to new private bucket **`models`** (migration `...0010_models_bucket`; bucket created live via
+  the Storage API 2026-11-22) as `<spot>/<version>.joblib` + `.json` metrics, plus a `models` row
+  (`accuracy` = 1 - test MAE/4, `is_active = false`). Tested: synthetic data (model MAE 0.51 vs
+  simple 0.68), live save + download + public key refused, test row/files deleted.
+  `jobs/requirements.txt` now pinned (scikit-learn 1.4.2, numpy 1.23.5, scipy 1.13.0, joblib
+  1.4.0); `train.yml` installs it.
+- [x] Migration 10 checked live (2026-11-22): `models` bucket private; with the public key a probe
+  file is invisible in listings, unreadable (3 URL forms) and can't be deleted; probe removed.
+- [x] Step 19 (2026-11-22): model activation + predictions + schedules.
+  - `train.py` now compares the new model with the **current active model on the same test days**
+    and activates it (migration `...0011_activate_model`: `activate_model(p_model_id)`, one
+    transaction, service key only) only if its error is lower than both the simple score's and
+    the current model's (the current one may have seen those days: errs toward keeping it; if it
+    can't be loaded, only the simple score must be beaten). Comparison saved in the `.json`
+    (`vs_current`). `--no-activate`. Bundle now has `reference` (feature medians) and each model
+    remembers its feature list (`features_`), so a model with other features still loads.
+  - `jobs/predict.py`: for the newest live forecast run (lead 0-96 h) upserts `predictions`
+    (`simple_score` always; `ai_score`, `ai_wave_height`, `confidence` = model accuracy,
+    `reason`, `model_version` from the active model, else null so a deactivated model disappears
+    at once). Past hours keep their last prediction (the app's 14-day chart uses them). Reason:
+    replaced in Step 20 (`jobs/reasons.py`).
+    `--dry-run`, `--show N`, `--model-file` (dry run only).
+  - Workflows: `collect.yml` installs `jobs/requirements.txt` (pip cache) and runs
+    "Predictions" after the forecast step every hour; `train.yml` cron **enabled** (`23 3 * * *`
+    UTC, from `main` only) and runs predict after training.
+  - Tested: synthetic model on the real forecast (reasons, wave height, confidence), live write
+    of 97 simple-only rows (kept: invisible to the app, which reads only rows with `ai_score`),
+    clear error while migration 11 is missing. The app's AI path itself was never run against
+    real rows (deliberately: production reads `predictions`, so no fake AI scores were written).
+  - Migration 11 applied and tested live (2026-11-22, test models + files deleted afterwards):
+    switching A -> B leaves exactly one active, repeat is a no-op, unknown id refused (HTTP 500,
+    errcode P0002; harmless, the job only activates ids it just inserted, but `http()` retries
+    5xx so it takes ~6 s), public key gets 401. With an active model whose file can't be loaded:
+    train says so and only has to beat the simple score; predict exits 1 (red step) and writes
+    simple-only rows. With a real (synthetic) model saved via `train.save` + activated: predict
+    --dry-run used it (85 of 97 hours changed, reasons + heights), train compared against it.
+- [x] Step 20 (2026-11-22): reason text from the model, `jobs/reasons.py` (used by `predict.py`,
+  shown in the app under the score: `Verdict.tsx`, and `ConditionsPanel.tsx` for other hours).
+  Exact group Shapley values (SHAP's math, no `shap` library): 6 groups (wind, swell, waves,
+  tide, time of day, season; lead time and the simple score stay fixed), 2^6 = 64 model calls
+  per hour with left-out groups at their training median; they add up exactly to correction(hour)
+  - correction(ordinary hour). Words: "<condition range> — usually better|worse than forecast
+  here", e.g. "Offshore wind under 15 km/h — …", "Long-period swell — …", "Waves 0.5–1 m",
+  "Higher sea level than usual", "Early morning", "Winter days"; a second condition joins with
+  "and" if it pushes at least half as hard; swell names only the parts that matter (size /
+  period / direction, each tested alone); "Days like this — …" when the spot-wide difference
+  outweighs any one condition or no group pushes >= 0.15 points; null when the shown 1-5 value
+  doesn't change (the app keeps the simple reason). Tested: Shapley sums exact; synthetic models
+  name the planted cause (light offshore wind, swell period, spot-wide +1); real forecast dry run
+  ~3 s for 97 hours; longest reason 91 chars = 2 lines at phone width (checked in the dev app
+  with a stubbed predictions response, nothing written to the database).
+- [x] Step 21 (2026-11-22): nightly flow as asked (supersedes parts of steps 18-19).
+  - `train.py`: test set = ratings of the **last 14 days** (`--test-days`, was "newest 20% of
+    days"); fit on older ratings only. Activate only if the new model beats the simple score on
+    those days AND the current active model on the test ratings the current model never saw
+    (bundle `max_rating_id`; last night's model saw ~13 of the 14 days, so comparing on all of
+    them would always favour it). Fewer than `--min-test` (10) such ratings = keep the current
+    model; equal error = keep. Unloadable current model = only the simple score must be beaten.
+  - **General model**: spots without `--min-train` (30) older + `--min-test` (10) recent ratings
+    get one model trained on the ratings of ALL spots (inactive spots too; features are relative
+    to each beach). Same evaluation (all spots' last 14 days), saved once as
+    `models/general/general-<ts>.joblib` + `.json`, one `models` row per spot using it, activated
+    per spot by the same rule; it never replaces a spot's own model (bundle `scope`
+    'spot'/'general'). Too few ratings across all spots = nothing changes.
+  - `predict.py`: next **72 h** only (`--hours`, was 96 h); rows beyond the horizon are deleted
+    each run, so the app's 4th day tab shows the simple score.
+  - `train.yml`: nightly 03:23 UTC (from `main`): secrets check, `train --test-days 14`, then
+    `predict --hours 72`; "Run workflow" button with dry run / no-activate options.
+    `collect.yml`: predictions now run after ALL collectors (newest forecast).
+  - Tested: fake 3-spot data with mocked database calls: 8 activation scenarios (none, saw-all,
+    older worse/equal, unloadable, general vs own, general vs general, no win vs simple) and the
+    whole nightly flow (busy spot own model; 25-rating and 0-rating spots get the general one).
+    Live: train dry run (Vilanova -> general -> too few ratings, unchanged), predict wrote 74 h
+    and removed the 72-96 h rows (simple-only, nothing user-visible).
+- [x] Step 22 (2026-11-22): the app shows the AI model to users.
+  - Migration `...0012_model_info` (applied + tested live 2026-11-22): `models.n_ratings`, `n_spots`, `scope`
+    (written by `train.py`; if the columns are missing it saves without them + a warning) and
+    public `spot_model_info(p_spot_id, p_days<=60, default 14)` (security definer, counts only):
+    active model version/scope/n_ratings/n_spots, and over the last 14 days each non-hidden
+    community/'me' rating (de-duplicated) matched with that hour's prediction that had an AI
+    score: `compared`, `ai_closer`, `simple_closer` (AI rounded as shown; ties in neither).
+  - App: `lib/modelInfo.ts` (`useModelInfo`, saved copy `surf:last:model:<spot>`, refresh on
+    online + every 15 min; null if the function is missing = nothing new shown). `Score.simple`
+    (set by `resolveScore` for AI scores). `Verdict`: "4/5 Good" + AI-corrected badge +
+    "Forecast alone 1/5 Flat" (small) + reason + "Learned from 212 surfer reports" (" across N
+    spots" for a general model). `ConditionsPanel`: "AI-corrected · forecast alone 1" for other
+    hours. Chart section: "On 25 rated hours in the last 14 days, the AI was closer to what
+    surfers said 18 times, the raw forecast 4 times (equally close 3 times)" + a split bar
+    (AI-score colour / grey / simple-score colour, text labels) + "The AI score has learned from
+    212 surfer reports so far. Every rating helps it."
+  - Tested in the dev app at phone size with stubbed predictions + model info (nothing written
+    to the database; stub copies removed from that browser's storage): without the function the
+    app is unchanged (404 handled); with it, everything above shows. `tsc` + build pass.
+    Bump `web/package.json` version when releasing this.
+  - Live test of `spot_model_info` (2026-11-22, throwaway spot `zz-test`, all rows deleted after):
+    public key can call it, still can't read `models`/`ratings`; Vilanova = no active model.
+    Planted 10 ratings: 5 compared (hidden, past_session, > 14 days, no AI score that hour and a
+    same-device duplicate excluded), AI closer 3 / forecast 1 / tie 1 (4.5 counts as 5; :20/:40
+    round to the nearest hour); `p_days` 999 -> 60; inactive spot -> not active;
+    `train.insert_model_row` wrote n_ratings/n_spots/scope.
 - [ ] Open items (do before or while building the jobs):
-  - **Merge `test-preview` into `main`** to put steps 9-11 live (local `main` also has an
-    unpushed commit, 3f51532, which `test-preview` already contains).
+  - **Commit steps 12-16, then merge `test-preview` into `main`** to put steps 9-16 live (local
+    `main` also has an unpushed commit, 3f51532, which `test-preview` already contains).
+    Nothing from steps 12-16 is committed yet. Scheduled runs only happen from `main`.
   - **Pick the main address**: `SITE_URL` (QR poster, `/rate` link, canonical, `og:url`,
     `og:image`) is `surfwithai.vercel.app`, which only 307-redirects to the production address
     `isitworthsurf.vercel.app`. Either make `surfwithai` the production domain in Vercel
@@ -278,20 +495,37 @@ Spots are **config-driven**, so more can be added later without code changes.
     (the service worker cache updates on its own from file hashes).
   - No automated tests and no ESLint config in `web/` (type-check only: `npx tsc -b`).
   - **Rotate the Supabase secret key and Windy key** (pasted in chat; old ones still work).
-  - Add the 3 GitHub Actions secrets, run Actions > Check connections (not done yet).
-  - Supabase free projects **pause after ~7 days without activity**; only the hourly job
-    keeps it awake, so schedule it soon after it works.
+  - Add the 3 GitHub Actions secrets (after rotating), run Actions > Check connections, then
+    Hourly collect with "Dry run" ticked, then a real run (none of this done yet).
+  - **First unattended runs not seen yet**: PORTUS may block or slow GitHub's (US) servers;
+    Windy/Open-Meteo untested from there too. Check the first day of runs.
+  - A broken collector fails **every hour**, and GitHub emails each failed scheduled run: fix
+    or disable the workflow quickly (Actions > Hourly collect > ... > Disable workflow).
+  - Supabase free projects **pause after ~7 days without activity**; the hourly job keeps it
+    awake once it runs from `main`.
   - GitHub **disables scheduled workflows after 60 days without commits**; re-enable in the
     Actions tab or keep committing.
-  - `forecasts` grows fast (16-day forecast x 24 h x every hour ~ 3M rows/year, beyond the
-    500 MB free tier): store fewer lead hours or fetch less often, and prune old rows.
+  - **`forecasts` growth**: 97 rows/hour/spot (lead 0-96 h) ~ 850k rows/year/spot, roughly
+    200 MB/year with indexes: Vilanova alone hits the 500 MB free tier in ~2 years, faster
+    with more spots. Decide a pruning rule (e.g. after 30 days keep only leads 0/1/3/6/12/24/
+    48/72/96, or only hours near ratings) and add it to the forecast job. No pruning yet.
+  - Training notes: skip `ratings.hidden`; de-duplicate same device + surfed_at; rows with
+    `marine_model = 'historical:best_match'` are lead-0 history, not live forecasts;
+    `past_session` ratings keep the screenshot forecast in `forecast_shown.hours` (different
+    shape from the app's); `ncep_gfswave025` rows report swell as 0.0, not null; buoy 1731
+    has no wind.
   - `near_beach` and `device_id` are self-reported, so don't trust them blindly in training.
-  - `ultralytics` pulls a large CUDA `torch` by default; install the CPU build in Actions.
-  - `jobs/requirements.txt` has no upper version bounds; pin once the jobs work.
-  - The train job must switch `models.is_active` in one transaction (only one active per spot).
-- [ ] Not built yet: real collect/train jobs.
-- Earlier local prototype (built under the previous plan; still in this folder, not yet
-  migrated):
+  - Crowd counting **deferred** (Vilanova's 400x224 cam images are too small). When built:
+    `ultralytics` pulls a large CUDA `torch` by default; install the CPU build in Actions.
+  - The collectors use only the standard library; training needs `jobs/requirements.txt` (pinned
+    scikit-learn etc.; `train.yml` installs it). Keep the pins equal wherever models are loaded.
+  - No automated tests for `jobs/` (tested by hand with dry runs and forced failures).
+- [ ] Not built yet: crowd counting (deferred). Hourly predict adds a scikit-learn install to
+  every collect run (more Actions minutes; fine if the repo is public, watch the 2,000 min/month
+  limit if private).
+- Earlier local prototype (built under the previous plan; still in this folder). Its forecast,
+  buoy and past-session parts are **superseded** by `jobs/collect_forecast.py`,
+  `jobs/collect_buoy.py`, `jobs/import_past.py`; the SQLite data was not migrated:
   - `collector/` (Python, local SQLite in `C:\Users\pages\surf-app-data\surf.db`, paths in
     `collector/paths.py`): `forecast.py` (Open-Meteo marine + wind + tide, falls back to
     `ncep_gfswave025` when the default model returns nulls), `buoy.py` (PORTUS buoys 1731
@@ -302,5 +536,5 @@ Spots are **config-driven**, so more can be added later without code changes.
   - Old spot coordinates were 41.21061, 1.71594; there was also a past-data-only Bogatell
     (Barcelona) spot (41.3946, 2.2077) with one reported session (2026-11-05, rating 4).
   - PORTUS buoy data for past dates needs a manual data request on portus.puertos.es.
-- Note: this machine only has Python 3.10; Python 3.11+ must be installed locally (GitHub
-  Actions can use 3.11+ directly).
+- Note: this machine only has Python 3.10; the collectors work on 3.10 (stdlib only). Python
+  3.11+ is needed locally once training libraries come in (GitHub Actions uses 3.11).
