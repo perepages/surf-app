@@ -180,10 +180,11 @@ Spots are **config-driven**, so more can be added later without code changes.
   immutable (font files aren't hashed: rename one if it ever changes). Vercel project Root
   Directory = `web`; env vars `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` for Production and
   Preview. Vercel project exists: **production is `https://isitworthsurf.vercel.app`**;
-  `https://surfwithai.vercel.app` is set up in Vercel as a 307 redirect to it. As of 2026-11-22
-  production still runs old `main` (f0e56f5, before `vercel.json`): `/rate`, `/admin`, `og.png`
-  are 404 there and the cache headers are Vercel's defaults. Everything from Step 9 on is on
-  branch `test-preview` (preview builds pass), not merged yet.
+  `https://surfwithai.vercel.app` is set up in Vercel as a 307 redirect to it. Since 2026-11-22
+  production runs `main` 75d523c (app 0.2.0), live ~60 s after the push: `/`, `/rate`, `/admin`,
+  `og.png`, `sw.js`, manifest all 200; `no-cache` on page/sw/manifest; `X-Frame-Options: DENY`;
+  `/api/admin` answers "Wrong password" (so `ADMIN_PASSWORD` is set there; a real login is
+  still unconfirmed); `og:image` still points at `surfwithai` (see "Pick the main address").
 - [x] Step 10 (2026-11-21): share kit. Live address `https://surfwithai.vercel.app` (one place:
   `web/src/lib/site.ts`, also the share title/description). Short link **`/rate`** opens the app
   with the rating form up (`OPENED_TO_RATE` in `App.tsx`, then the address is set back to `/`;
@@ -462,10 +463,22 @@ Spots are **config-driven**, so more can be added later without code changes.
     same-device duplicate excluded), AI closer 3 / forecast 1 / tie 1 (4.5 counts as 5; :20/:40
     round to the nearest hour); `p_days` 999 -> 60; inactive spot -> not active;
     `train.insert_model_row` wrote n_ratings/n_spots/scope.
-- [ ] Open items (do before or while building the jobs):
-  - **Commit steps 12-16, then merge `test-preview` into `main`** to put steps 9-16 live (local
-    `main` also has an unpushed commit, 3f51532, which `test-preview` already contains).
-    Nothing from steps 12-16 is committed yet. Scheduled runs only happen from `main`.
+- [x] Released 2026-11-22: steps 12-22 committed on `test-preview` (5 commits, secret scan
+  clean), `main` fast-forwarded to it and pushed (`main` = `test-preview` = 75d523c). Vercel
+  deploys production from `main`; the hourly (:17) and nightly (03:23 UTC) schedules are now
+  active on GitHub. App version 0.2.0.
+- [ ] **Next for me, in this order** (only I can do these; until 2, every hourly run fails and
+  GitHub emails me):
+  1. Rotate the Supabase secret key and the Windy key (both were pasted in chat).
+  2. GitHub > Settings > Secrets and variables > Actions: `SUPABASE_URL`,
+     `SUPABASE_SERVICE_ROLE_KEY`, `WINDY_API_KEY`. Then Actions > Check connections, then
+     Hourly collect with "Dry run", then Nightly train with "Dry run". (Or disable both
+     workflows in the Actions tab until then.)
+  3. Vercel > Project > Settings > Environment Variables, **Production**: `ADMIN_PASSWORD`,
+     `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (the new key), then redeploy; check `/admin`.
+  4. Put the new service key in local `.env` too.
+  5. Before printing posters: pick the main address (see below) and fill `CONTACT`.
+- [ ] Open items:
   - **Pick the main address**: `SITE_URL` (QR poster, `/rate` link, canonical, `og:url`,
     `og:image`) is `surfwithai.vercel.app`, which only 307-redirects to the production address
     `isitworthsurf.vercel.app`. Either make `surfwithai` the production domain in Vercel
@@ -494,9 +507,6 @@ Spots are **config-driven**, so more can be added later without code changes.
   - Bump `web/package.json` version on releases: it's the `app_version` stored with ratings
     (the service worker cache updates on its own from file hashes).
   - No automated tests and no ESLint config in `web/` (type-check only: `npx tsc -b`).
-  - **Rotate the Supabase secret key and Windy key** (pasted in chat; old ones still work).
-  - Add the 3 GitHub Actions secrets (after rotating), run Actions > Check connections, then
-    Hourly collect with "Dry run" ticked, then a real run (none of this done yet).
   - **First unattended runs not seen yet**: PORTUS may block or slow GitHub's (US) servers;
     Windy/Open-Meteo untested from there too. Check the first day of runs.
   - A broken collector fails **every hour**, and GitHub emails each failed scheduled run: fix
