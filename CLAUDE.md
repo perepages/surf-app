@@ -467,17 +467,17 @@ Spots are **config-driven**, so more can be added later without code changes.
   clean), `main` fast-forwarded to it and pushed (`main` = `test-preview` = 75d523c). Vercel
   deploys production from `main`; the hourly (:17) and nightly (03:23 UTC) schedules are now
   active on GitHub. App version 0.2.0.
-- [ ] **Next for me, in this order** (only I can do these; until 2, every hourly run fails and
-  GitHub emails me):
-  1. Rotate the Supabase secret key and the Windy key (both were pasted in chat).
-  2. GitHub > Settings > Secrets and variables > Actions: `SUPABASE_URL`,
-     `SUPABASE_SERVICE_ROLE_KEY`, `WINDY_API_KEY`. Then Actions > Check connections, then
-     Hourly collect with "Dry run", then Nightly train with "Dry run". (Or disable both
-     workflows in the Actions tab until then.)
-  3. Vercel > Project > Settings > Environment Variables, **Production**: `ADMIN_PASSWORD`,
-     `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (the new key), then redeploy; check `/admin`.
-  4. Put the new service key in local `.env` too.
-  5. Before printing posters: pick the main address (see below) and fill `CONTACT`.
+- [x] Go-live setup done by hand 2026-11-22 (step by step with me):
+  - Supabase secret key replaced (`jobs_nov_2026`, new-style `sb_secret_`; old key deleted) and
+    Windy key replaced (`jobs_nov_2026`; old one deleted); local `.env` updated; check 9/9 OK.
+  - GitHub Actions secrets `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `WINDY_API_KEY` added.
+    "Check connections" green; "Hourly collect" dry run + real run green (forecast run 13:00 UTC,
+    both buoys 13:00, cam snapshot 13:44, predictions written 13:54, all seen in the database);
+    "Nightly train" dry run green. Both scheduled workflows are **enabled** and running.
+  - Vercel: `SUPABASE_SERVICE_ROLE_KEY` updated (Production + Preview), `SUPABASE_URL` and
+    `ADMIN_PASSWORD` present, production redeployed; **/admin login confirmed working**.
+- [ ] Before printing posters: pick the main address (see open items) and fill `CONTACT` in
+  `PrivacyPage.tsx`.
 - [ ] Open items:
   - **Pick the main address**: `SITE_URL` (QR poster, `/rate` link, canonical, `og:url`,
     `og:image`) is `surfwithai.vercel.app`, which only 307-redirects to the production address
