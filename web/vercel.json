@@ -7,7 +7,8 @@
   "trailingSlash": false,
   "rewrites": [
     { "source": "/rate", "destination": "/index.html" },
-    { "source": "/admin", "destination": "/index.html" }
+    { "source": "/admin", "destination": "/index.html" },
+    { "source": "/spot/:id", "destination": "/index.html" }
   ],
   "headers": [
     {
@@ -27,6 +28,10 @@
     },
     {
       "source": "/rate",
+      "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+    },
+    {
+      "source": "/spot/(.*)",
       "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
     },
     {

@@ -1,0 +1,4 @@
+# Surf alerts (jobs/notify.py): web push encryption + VAPID signing.
+# Installed ONLY inside GitHub Actions (collect.yml), never locally and never in
+# jobs/requirements.txt (decided 2026-11-22). notify.py --dry-run works without it.
+pywebpush==2.0.3

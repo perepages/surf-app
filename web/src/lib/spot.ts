@@ -29,6 +29,6 @@ export async function loadSpot(id: string, signal?: AbortSignal): Promise<Spot> 
       console.warn('Could not load spot from Supabase, using built-in copy', err)
     }
   }
-  if (!fallback) throw new Error(`Unknown spot "${id}"`)
+  if (!fallback) throw new Error(`there’s no spot called "${id}" (it may have been removed)`)
   return fallback
 }

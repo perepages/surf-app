@@ -63,16 +63,17 @@ export function PrivacyPage() {
       <Section title="Other services your browser talks to">
         <p>
           Open-Meteo, for the forecast. It gets the beach’s position, never yours, and sees your IP
-          address, as any website you load does. Everything else (including the fonts) comes from this
-          app itself.
+          address, as any website you load does. OpenStreetMap, only when you open the map: its
+          servers send the map pictures for the area on screen and see your IP address too.
+          Everything else (including the fonts) comes from this app itself.
         </p>
       </Section>
 
       <Section title="Stored on this phone">
         <p>
           The app itself and the last forecast, AI scores and report summaries it loaded (so it opens
-          instantly and works offline), the times of your last ratings (for the 3-a-day limit) and the
-          device id. Clearing this site’s data, or removing the app, removes all of it.
+          instantly and works offline), the times of your last ratings (for the 3-a-day limit), the
+          device id, and your favourite spots and list/map choice (never sent anywhere). Clearing this site’s data, or removing the app, removes all of it.
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-kelp px-3 py-2.5">
           <span className="text-sm text-mist">Device id:</span>
@@ -94,6 +95,16 @@ export function PrivacyPage() {
           Forgetting it means your next rating gets a new id. Ratings already sent stay, without anything
           linking them to you.
           {CONTACT && ` To have ratings from this phone removed, send the id above to ${CONTACT}.`}
+        </p>
+      </Section>
+
+      <Section title="Surf alerts (only if you turn one on)">
+        <p>
+          To send an alert we store your browser’s push address (a long random link at Google,
+          Apple, Mozilla or Microsoft, who deliver the notification), its encryption keys, the
+          spot and the score you picked. No name, location or device id. The alert text goes
+          through that push service, encrypted. “Turn off” deletes it at once; so does
+          removing the app, the next time an alert would be sent.
         </p>
       </Section>
     </main>

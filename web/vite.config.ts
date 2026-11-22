@@ -62,17 +62,19 @@ function serviceWorker(): Plugin {
 }
 
 /**
- * Adds a tiny inline script to index.html that starts the two Open-Meteo requests at once,
- * in parallel with the app's JavaScript, unless the saved forecast is still fresh. The app
- * picks the responses up by URL (openMeteo.ts takePrefetched). Coordinates come from the last
- * spot saved on the phone, else the built-in copy.
+ * Adds a tiny inline script to index.html that, on a spot's page (/spot/<id>, or /rate =
+ * the default spot), starts that spot's two Open-Meteo requests at once, in parallel with the
+ * app's JavaScript, unless its saved forecast is still fresh. The app picks the responses up by
+ * URL (openMeteo.ts takePrefetched). Coordinates come from the spot saved on the phone, else
+ * the built-in copy. The home screen (all spots) makes its own small request, so nothing here.
  */
 function prefetchForecast(): Plugin {
-  const fallback = FALLBACK_SPOTS[DEFAULT_SPOT_ID]
+  const fallbacks = Object.fromEntries(Object.values(FALLBACK_SPOTS).map((s) => [s.id, { lat: s.lat, lon: s.lon }]))
   const templates = primaryRequestUrls({ lat: '__LAT__', lon: '__LON__' })
   const script = `(function(){try{
-var t=+localStorage.getItem(${JSON.stringify(FETCHED_AT_KEY)});if(t&&Date.now()-t<${CACHE_TTL_MS})return;
-var s=JSON.parse(localStorage.getItem(${JSON.stringify(`surf:last:spot:${DEFAULT_SPOT_ID}`)})||'null')||${JSON.stringify({ lat: fallback.lat, lon: fallback.lon })};
+var path=location.pathname.replace(/[/]+$/,''),m=path.match(/^[/]spot[/]([a-z0-9-]+)$/),id=m?m[1]:(path==='/rate'||location.hash==='#rate')?${JSON.stringify(DEFAULT_SPOT_ID)}:null;if(!id)return;
+var t=+localStorage.getItem(${JSON.stringify(FETCHED_AT_KEY)}+':'+id);if(t&&Date.now()-t<${CACHE_TTL_MS})return;
+var s=JSON.parse(localStorage.getItem('surf:last:spot:'+id)||'null')||${JSON.stringify(fallbacks)}[id];if(!s)return;
 var p=window.__surfPrefetch={};
 requestAnimationFrame(function(){setTimeout(function(){if(p.__started)return;
 ${JSON.stringify(templates)}.forEach(function(u){u=u.replace('__LAT__',s.lat).replace('__LON__',s.lon);p[u]=fetch(u).catch(function(){return null})});

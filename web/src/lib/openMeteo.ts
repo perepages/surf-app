@@ -190,13 +190,17 @@ function readCache(spot: Spot): Forecast | null {
 
 function writeCache(spot: Spot, f: Forecast) {
   try {
-    // Drop copies from older cache versions or old coordinates.
+    // One saved forecast per spot (each spot opens offline). Drop copies from older cache
+    // versions and this spot's old coordinates; other spots' copies stay.
+    const current = `surf:forecast:v${CACHE_VERSION}:`
     for (const k of Object.keys(localStorage)) {
-      if (k.startsWith('surf:forecast:') && k !== cacheKey(spot)) localStorage.removeItem(k)
+      if (!k.startsWith('surf:forecast:') || k === cacheKey(spot)) continue
+      if (!k.startsWith(current) || k.startsWith(`${current}${spot.id}:`)) localStorage.removeItem(k)
     }
     localStorage.setItem(cacheKey(spot), JSON.stringify(f))
     // Small companion key: lets index.html decide whether to prefetch without parsing the forecast.
-    localStorage.setItem(FETCHED_AT_KEY, String(f.fetchedAt))
+    localStorage.setItem(`${FETCHED_AT_KEY}:${spot.id}`, String(f.fetchedAt))
+    localStorage.removeItem(FETCHED_AT_KEY) // the single-spot key used up to 0.3.0
   } catch {
     /* storage full or blocked: the app still works, just without a cache */
   }

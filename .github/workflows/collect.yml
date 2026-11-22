@@ -22,6 +22,10 @@ on:
         description: "Take a cam snapshot even at night (testing)"
         type: boolean
         default: false
+      test_push:
+        description: "Send a test surf alert to every phone that turned one on"
+        type: boolean
+        default: false
   # Cron is in UTC; an off-the-hour minute avoids GitHub's busiest slot, when scheduled
   # runs are often delayed or dropped. Schedules run only on the default branch (main).
   schedule:
@@ -39,10 +43,14 @@ env:
   SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
   SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
   WINDY_API_KEY: ${{ secrets.WINDY_API_KEY }}
+  # Surf alerts (web push). Optional: without them the alerts step is skipped with a notice.
+  VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+  VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
   # Manual-run options (empty on scheduled runs). Passed through env, never pasted into
   # the shell script, so input text can't run as a command.
   DRY_RUN: ${{ inputs.dry_run }}
   ANY_TIME: ${{ inputs.any_time }}
+  TEST_PUSH: ${{ inputs.test_push }}
 
 jobs:
   collect:
@@ -72,6 +80,11 @@ jobs:
           FLAGS=""
           [ "$DRY_RUN" = "true" ] && FLAGS="$FLAGS --dry-run"
           [ "$ANY_TIME" = "true" ] && FLAGS="$FLAGS --any-time"
+          for name in VAPID_PRIVATE_KEY VAPID_SUBJECT; do
+            if [ -z "${!name}" ]; then
+              echo "::notice title=Surf alerts off::$name is not set, so no alerts are sent"
+            fi
+          done
           echo "FLAGS=$FLAGS" >> "$GITHUB_ENV"
           echo "Collector flags:${FLAGS:- (none)}"
 
@@ -101,3 +114,19 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 10
         run: python -m jobs.predict $FLAGS
+
+      # Surf alerts: after the predictions, so they use the newest scores. pywebpush is only
+      # installed here (jobs/requirements-push.txt), never on the laptop.
+      - name: Install push library
+        if: ${{ !cancelled() && env.VAPID_PRIVATE_KEY != '' }}
+        run: pip install -r jobs/requirements-push.txt
+
+      - name: Surf alerts (web push)
+        if: ${{ !cancelled() && env.VAPID_PRIVATE_KEY != '' }}
+        timeout-minutes: 10
+        run: |
+          if [ "$TEST_PUSH" = "true" ]; then
+            python -m jobs.notify --test $FLAGS
+          else
+            python -m jobs.notify $FLAGS
+          fi

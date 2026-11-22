@@ -534,6 +534,99 @@ Spots are **config-driven**, so more can be added later without code changes.
   cron is on `main`, but at 17:20 UTC the only runs were the manual ones from 13:51-13:56; the
   newest stored forecast was from 13:00. GitHub sends no email when a run never starts.
   App (steps 22-24) reviewed: no crash paths found beyond the open items below.
+- [x] Step 25 (2026-11-22, asked for as "Step 7"): `python jobs/add_spot.py` (stdlib only;
+  `--dry-run` asks everything and inserts nothing; `q` stops at any question). Asks the name and
+  coordinates (Google Maps "lat, lon" paste); checks the point with Open-Meteo: elevation API
+  (sea = 0 m; > 5 m = "on land") and the Marine sea cell it snaps to (it always snaps to the
+  nearest sea cell, so a point on land still "has waves"; > 30 km = not local), plus a time-zone
+  suggestion. Id = slug from the name before "(" (checked unique, `general` reserved). Cams:
+  Windy `webcams?nearby=lat,lon,10` (title, km, compass direction, image age, windy.com link;
+  URLs not stored). Buoys: PORTUS `GET estaciones/rt/WAVE` (+ `/WIND` list), wave stations
+  within 150 km (max 8), each checked live with `lastData` (waves / wind / newest reading age);
+  suggests the nearest live buoy + the nearest live one with wind. Orientation in degrees or a
+  compass point (SSE = 158). Time zone checked with `zoneinfo`. Shows the row, inserts into
+  `spots` (active) after "y". Warns if an existing spot is < 1 km away. Tested: bad answers
+  re-asked, inland point refused, live insert of `zz-test` (Sitges cam + 1731/2720) picked up by
+  dry runs of collect_forecast, collect_buoy, collect_cam, predict and train, then deleted (no
+  rows left in any table). **The web app still shows only `DEFAULT_SPOT_ID` (vilanova)**: a new
+  spot is collected and trained on, but users can't see or rate it until a spot picker exists.
+  Wind-only met stations (e.g. Barcelona port) aren't listed (wave buoys only).
+- [x] Step 26 (2026-11-22): home screen = all spots. **New npm packages (asked for): `leaflet`
+  1.9.4 + `@types/leaflet` (dev)**; no react-leaflet.
+  - Routes (`lib/route.ts`, no router library): `/` = spot list, `/spot/<id>` = the old spot
+    screen (back link "‹ All spots", "☆ Add to your spots"). `/rate` now goes to
+    `/spot/vilanova` with the form open. `vercel.json` rewrites `/spot/:id` to `index.html`
+    (no-cache); the service worker already serves the shell for any page (offline works).
+  - Data (`lib/spotList.ts`): active spots from `spots` (saved copy, else built-in), ONE
+    Open-Meteo marine + ONE forecast request for all spots (multi-location, past 1 h + next 4 h;
+    GFS-wave fallback for null waves), AI score for the current hour from `predictions`
+    (`spot_id=in.(…)`), crowd = most common crowd in today's surfer reports
+    (`spot_reports_today` per spot; cams can't count people yet). Saved copy
+    `surf:last:spot-list:v1`, refreshed like the spot screen (30 min / hour change / online).
+  - List (`HomeScreen.tsx`): best score now first (then wave height, name); "Your spots"
+    (favourites) on top, then the rest. Row: score, name + beach, GO/SKIP word, AI tag, wind tag,
+    "after dark", `MiniWave.tsx` (CSS transform loop: height = wave height, speed from period,
+    score colour; off under reduce motion), height + period, crowd dots + "Busy · 3 reports".
+  - Favourites (`lib/favourites.ts`): `surf:favourites` in localStorage, synced across screens
+    and tabs, never sent. List/Map choice remembered (`surf:home-view`).
+  - Map (`SpotMap.tsx`, lazy chunk ~45 KB gz + 6 KB CSS, downloaded only when opened): OSM
+    tiles `tile.openstreetmap.org` with "© OpenStreetMap contributors", score-coloured markers
+    (sand ring = favourite), names always shown when ≤ 8 spots, tap/Enter opens the spot.
+    Privacy page mentions OpenStreetMap + favourites. OSM's tile policy is fine for low traffic;
+    a busy app should move to a tile provider with a key.
+  - Forecast cache is now one copy per spot (opening another spot no longer drops the first);
+    the index.html prefetch only runs on `/spot/<id>` and `/rate`, per spot
+    (`surf:forecast-fetched-at:<id>`). `measure-pwa.mjs` waits for the first spot row on `/`.
+  - Tested in the dev app at phone size with 4 stubbed spots (stubs in that browser only,
+    nothing written to the database; removed afterwards): ranking (stubbed AI 4 first), crowd
+    levels, favourites move to "Your spots" and sync with the spot page, map markers + labels +
+    tap → `/spot/castelldefels`, back button, unknown spot message, `/rate`. Prod build: measure
+    script = service worker, offline start, installable all OK; map CSS + tiles load. `tsc`,
+    lint (warnings only), build pass. Main JS 296 → 311 KB.
+  - Not done: bump `web/package.json` to 0.4.0 when releasing; with only Vilanova in `spots` the
+    list has one row; share tags/poster still say "Vilanova Surf"; not checked on a real phone.
+- [x] Step 27 (2026-11-22): optional surf alerts by web push. **New library (approved): `pywebpush`
+  2.0.3** in `jobs/requirements-push.txt`, installed ONLY in GitHub Actions (not in
+  `jobs/requirements.txt`, never locally). No new npm packages.
+  - Migration `...0013_push_alerts` (**not applied yet**): `push_subscriptions` (endpoint, p256dh,
+    auth, spot_id, min_score 2-5, last_sent_at, notified_until, failures; unique endpoint+spot; no
+    public access) + public SECURITY DEFINER `push_subscribe` (only real push services: FCM,
+    Mozilla, Apple, Windows; spot must be active; max 10 spots per phone; changing the score
+    resets `notified_until`), `push_unsubscribe(endpoint, spot|null)`, `push_alerts(endpoint)`.
+    Knowing the endpoint = owning the alert.
+  - Keys: `npm --prefix web run vapid-keys` (`web/scripts/vapid-keys.mjs`, Node built-in crypto)
+    wrote `VITE_VAPID_PUBLIC_KEY` (raw P-256 point), `VAPID_PRIVATE_KEY` (raw 32-byte scalar,
+    never printed) and `VAPID_SUBJECT` (`https://isitworthsurf.vercel.app`) into the local `.env`
+    on 2026-11-22; refuses to overwrite (new keys break every existing alert; `--force`).
+  - `jobs/notify.py` (last step of `collect.yml`, hourly, only when the `VAPID_PRIVATE_KEY` secret
+    is set): per alert, the spot's `predictions` for the next 24 h, AI score else simple (half-up
+    rounding like the app), daylight hours only (Open-Meteo sun times, hour middle; fallback
+    06-18 UTC); first run of consecutive hours >= min = the window. Skips a window already
+    announced (`notified_until`) and anything within 12 h of the last alert. Title = best hour
+    ("Sitges: 4/5 Good tomorrow at 11h"), body = window ("4/5 or better tomorrow 10-13h.
+    AI-corrected forecast."), opens `/spot/<id>`, TTL = until the window ends. 404/410 -> row
+    deleted; other errors count `failures` (10 -> deleted); 401/403 (our VAPID key wrong) never
+    counts against the phone, fails the step. Endpoints are never logged (host + row id only).
+    `--dry-run` (no pywebpush needed), `--test` (test push to every alert). Workflow "Run
+    workflow" has a "Send a test surf alert" box. Missing table -> warning, exit 0.
+  - App: "🔔 Alert me" on each spot page (favourite button now "☆ Save"); lazy `AlertSheet.tsx`
+    (3+ / 4+ / only 5, turn on / change / off; explains iPhone Home Screen install, blocked
+    notifications, unsupported browsers); `lib/push.ts` (permission asked straight from the tap,
+    resubscribes if the key changed, local copy `surf:alerts`, synced with `push_alerts`; the
+    browser subscription is dropped when the last alert is turned off). Service worker: `push`
+    always shows a notification (tag per spot), `notificationclick` focuses an open window and
+    navigates, else opens one. Privacy page section "Surf alerts". README has the setup steps.
+  - Tested: notify logic with mocked database + sender (send + patch, already told, 12 h limit,
+    410 delete, 10th failure delete, 403 not counted, half-up 3.5 -> 4, daylight filter,
+    window wording across midnight); live `--dry-run` (table missing -> warning). Headless Chrome
+    on the prod build: service worker ready, real subscription with our VAPID key (FCM endpoint,
+    keys OK), notifications show; saving failed with 404 as expected (migration 13 missing).
+    Sheet checked at phone size (blocked + picker states). `tsc`, lint, build pass.
+  - **Not tested end to end** (needs migration 13, the GitHub secrets, Vercel env and a push to
+    `main`): pywebpush actually sending, delivery to a real Android phone / iPhone, tap opening
+    the spot. Not handled: `pushsubscriptionchange` (Firefox can rotate a subscription; the
+    old one gets 410 and is deleted, the user must turn the alert on again). Anyone with the
+    public key could add fake subscriptions on real push hosts; they die at the first send (404).
 - [ ] Before printing posters: pick the main address (see open items) and fill `CONTACT` in
   `PrivacyPage.tsx`.
 - [x] Step 23 (2026-11-22): laptop footprint check (nothing deleted).

@@ -13,6 +13,11 @@ import { DEFAULT_SPOT_ID } from './lib/spot'
 import { resolveScore } from './scoring/resolveScore'
 import type { Score } from './scoring/types'
 import { useNow, useOnline, useSpotForecast } from './useSpotForecast'
+import { HomeScreen, splitName } from './components/HomeScreen'
+import { useFavourites } from './lib/favourites'
+import { linkClick, spotPath, useRoute } from './lib/route'
+import { useSpotList } from './lib/spotList'
+import { readLocalAlerts, syncAlerts } from './lib/push'
 
 const loadMotionFeatures = () => import('./motionFeatures').then((r) => r.default)
 
@@ -23,6 +28,7 @@ const ForecastVsSurfers = lazy(() => import('./components/ForecastVsSurfers'))
 const RateSheet = lazy(() => import('./components/RateSheet').then((m) => ({ default: m.RateSheet })))
 const PrivacyPage = lazy(() => import('./components/PrivacyPage').then((m) => ({ default: m.PrivacyPage })))
 const HourSheet = lazy(() => import('./components/HourSheet').then((m) => ({ default: m.HourSheet })))
+const AlertSheet = lazy(() => import('./components/AlertSheet').then((m) => ({ default: m.AlertSheet })))
 
 /**
  * Renders children only once their placeholder comes within `margin` of the screen. Keeps the
@@ -59,13 +65,13 @@ function WhenNear({
 }
 
 /**
- * Opened via the short link /rate (QR poster, shared links): start with the rating form open.
- * Read once at start-up; the address is then set back to "/" so a reload, the back button or
- * "Add to Home Screen" doesn't land on the form again. Vercel serves index.html for /rate
- * (vercel.json rewrite) and the service worker does too, so it also works offline.
+ * Opened via the short link /rate (QR poster, shared links): Vilanova's page with the rating
+ * form open. Read once at start-up; the address is then set to that spot's page, so a reload,
+ * the back button or "Add to Home Screen" doesn't land on the form again. Vercel serves
+ * index.html for /rate (vercel.json rewrite) and the service worker does too (offline).
  */
 const OPENED_TO_RATE = window.location.pathname.replace(/\/+$/, '') === '/rate' || window.location.hash === '#rate'
-if (OPENED_TO_RATE) window.history.replaceState(null, '', '/')
+if (OPENED_TO_RATE) window.history.replaceState(null, '', spotPath(DEFAULT_SPOT_ID))
 
 /** "#privacy" shows the privacy page; anything else the forecast. No router needed for two views. */
 function useHash(): string {
@@ -82,17 +88,10 @@ function useHash(): string {
 }
 
 export default function App() {
-  const { state, retry } = useSpotForecast(DEFAULT_SPOT_ID)
+  const route = useRoute()
   const now = useNow()
   const online = useOnline()
   const showPrivacy = useHash() === '#privacy'
-
-  // Surfer reports start loading with everything else (not after the forecast), so the
-  // section is usually there before the screen first paints; refreshed after you rate.
-  const [reportsKey, setReportsKey] = useState(0)
-  const onRatingSent = useCallback(() => setReportsKey((k) => k + 1), [])
-  const reports = useReports(DEFAULT_SPOT_ID, reportsKey)
-  const model = useModelInfo(DEFAULT_SPOT_ID)
 
   return (
     // reducedMotion="user": Framer skips transform/layout animations when the OS asks for less motion.
@@ -101,37 +100,18 @@ export default function App() {
     <LazyMotion features={loadMotionFeatures} strict>
     <MotionConfig reducedMotion="user">
     <div className="mx-auto flex min-h-dvh max-w-3xl flex-col">
-      {showPrivacy && (
+      {showPrivacy ? (
         <ErrorBoundary name="Privacy page" fallback={<SectionFailed what="the privacy page" />}>
           <Suspense fallback={null}>
             <PrivacyPage />
           </Suspense>
         </ErrorBoundary>
-      )}
-      {!showPrivacy && state.status === 'loading' && (
-        <main className="flex flex-1 items-center px-4 sm:px-8">
-          <p className="font-display text-5xl font-extrabold text-mist">Checking the sea…</p>
-        </main>
-      )}
-      {!showPrivacy && state.status === 'error' && (
-        <main className="flex flex-1 flex-col justify-center gap-4 px-4 sm:px-8">
-          <p className="font-display text-5xl font-extrabold text-coral">No forecast</p>
-          <p className="max-w-[50ch]">Couldn't load the forecast: {state.message}</p>
-          <button
-            type="button"
-            onClick={retry}
-            className="self-start rounded-lg bg-foam px-4 py-2 font-semibold text-abyss hover:bg-glass"
-          >
-            Try again
-          </button>
-        </main>
-      )}
-      {!showPrivacy && state.status === 'ready' && (
-        <SpotScreen {...state} now={now} online={online} reports={reports} model={model} onRatingSent={onRatingSent} />
+      ) : route.name === 'home' ? (
+        <Home now={now} online={online} />
+      ) : (
+        <SpotPage key={route.spotId} spotId={route.spotId} now={now} online={online} />
       )}
 
-      {/* Hidden while loading, so it doesn't jump down when the forecast appears. */}
-      {(showPrivacy || state.status !== 'loading') && (
       <footer className="mt-auto px-4 pt-10 pb-6 text-xs text-mist sm:px-8">
         <a href="https://open-meteo.com/" target="_blank" rel="noreferrer" className="underline underline-offset-2 hover:text-foam">
           Weather data by Open-Meteo.com
@@ -140,11 +120,68 @@ export default function App() {
           Privacy
         </a>
       </footer>
-      )}
     </div>
     </MotionConfig>
     </LazyMotion>
   )
+}
+
+function Home({ now, online }: { now: number; online: boolean }) {
+  const { state, retry } = useSpotList()
+  useEffect(() => {
+    document.title = 'Surf right now'
+  }, [])
+  return <HomeScreen state={state} retry={retry} now={now} online={online} />
+}
+
+function BackLink() {
+  return (
+    <a href="/" onClick={linkClick} className="self-start rounded-full px-2 py-1 text-sm font-semibold text-mist hover:bg-deep hover:text-foam">
+      ‹ All spots
+    </a>
+  )
+}
+
+function SpotPage({ spotId, now, online }: { spotId: string; now: number; online: boolean }) {
+  const { state, retry } = useSpotForecast(spotId)
+
+  // Surfer reports start loading with everything else (not after the forecast), so the
+  // section is usually there before the screen first paints; refreshed after you rate.
+  const [reportsKey, setReportsKey] = useState(0)
+  const onRatingSent = useCallback(() => setReportsKey((k) => k + 1), [])
+  const reports = useReports(spotId, reportsKey)
+  const model = useModelInfo(spotId)
+
+  const name = state.status === 'ready' ? splitName(state.spot.name).town : null
+  useEffect(() => {
+    if (name) document.title = `${name} · Surf`
+  }, [name])
+
+  if (state.status === 'loading') {
+    return (
+      <main className="flex flex-1 flex-col gap-4 px-4 pt-4 sm:px-8">
+        <BackLink />
+        <p className="font-display text-5xl font-extrabold text-mist">Checking the sea…</p>
+      </main>
+    )
+  }
+  if (state.status === 'error') {
+    return (
+      <main className="flex flex-1 flex-col gap-4 px-4 pt-4 sm:px-8">
+        <BackLink />
+        <p className="font-display text-5xl font-extrabold text-coral">No forecast</p>
+        <p className="max-w-[50ch]">Couldn't load the forecast: {state.message}</p>
+        <button
+          type="button"
+          onClick={retry}
+          className="self-start rounded-lg bg-foam px-4 py-2 font-semibold text-abyss hover:bg-glass"
+        >
+          Try again
+        </button>
+      </main>
+    )
+  }
+  return <SpotScreen {...state} now={now} online={online} reports={reports} model={model} onRatingSent={onRatingSent} />
 }
 
 type ReadyState = Extract<ReturnType<typeof useSpotForecast>['state'], { status: 'ready' }>
@@ -211,13 +248,60 @@ function SpotScreen({ spot, forecast, stale, refreshing, ai, now, online, report
     return forecast.days.map((d) => d.sunrise).find((s): s is number => s != null && s > now) ?? null
   }, [forecast, nowHour, now])
 
-  const placeName = spot.name.match(/\((.*)\)/)?.[1]
+  const { town, beach: placeName } = splitName(spot.name)
+  const { ids: favIds, toggle } = useFavourites()
+  const favourite = favIds.has(spot.id)
+
+  // Surf alert for this spot: local copy at once, then what the database really has.
+  const [alertMin, setAlertMin] = useState<number | null>(() => readLocalAlerts()[spot.id] ?? null)
+  useEffect(() => {
+    let live = true
+    void syncAlerts().then((a) => live && setAlertMin(a[spot.id] ?? null))
+    return () => {
+      live = false
+    }
+  }, [spot.id])
+  const [alertOpen, setAlertOpen] = useState(false)
+  const [alertLoaded, setAlertLoaded] = useState(false)
+  const closeAlert = useCallback(() => setAlertOpen(false), [])
 
   return (
     <main className="flex flex-col gap-3.5">
-      <header className="flex items-baseline justify-between gap-4 px-5 pt-5 pb-1 sm:px-8">
+      <div className="flex items-center justify-between px-3 pt-3 sm:px-6">
+        <BackLink />
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => {
+              setAlertLoaded(true)
+              setAlertOpen(true)
+            }}
+            aria-haspopup="dialog"
+            className={`rounded-full px-3 py-1 text-sm font-semibold hover:bg-deep ${alertMin != null ? 'text-sand' : 'text-mist hover:text-foam'}`}
+          >
+            {alertMin != null ? `🔔 Alert ${alertMin}+` : '🔔 Alert me'}
+          </button>
+          <button
+            type="button"
+            onClick={() => toggle(spot.id)}
+            aria-pressed={favourite}
+            aria-label={favourite ? `Remove ${town} from your spots` : `Add ${town} to your spots`}
+            className={`rounded-full px-3 py-1 text-sm font-semibold hover:bg-deep ${favourite ? 'text-sand' : 'text-mist hover:text-foam'}`}
+          >
+            {favourite ? '★ Saved' : '☆ Save'}
+          </button>
+        </div>
+      </div>
+      {alertLoaded && (
+        <ErrorBoundary name="Alert" fallback={<SectionFailed what="the alert settings" />}>
+          <Suspense fallback={null}>
+            <AlertSheet open={alertOpen} onClose={closeAlert} spotId={spot.id} town={town} current={alertMin} onChanged={setAlertMin} />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+      <header className="flex items-baseline justify-between gap-4 px-5 pb-1 sm:px-8">
         <div className="flex flex-col">
-          <span className="font-display text-[26px] font-extrabold">{spot.name.replace(/\s*\(.*\)\s*$/, '')}</span>
+          <span className="font-display text-[26px] font-extrabold">{town}</span>
           {placeName && <span className="text-[13px] text-mist">{placeName}</span>}
         </div>
         <span className="text-xs text-mist">Updated {hhmm(Math.floor(forecast.fetchedAt / 1000), tz)}</span>

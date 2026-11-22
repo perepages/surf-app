@@ -79,10 +79,12 @@ async function visit(cdp, { offline = false, profile } = {}) {
   const loaded = cdp.once('Page.loadEventFired')
   await cdp.send('Page.navigate', { url: URL_TO_TEST })
   await loaded
-  // Wait for the forecast to be on screen (the verdict word), up to 20 s.
+  // Wait for the forecast to be on screen, up to 20 s: on the home screen the first spot row,
+  // on a spot's page the verdict word (its only h1).
+  const SHOWN = `location.pathname.startsWith('/spot/') ? (document.querySelector('h1')?.textContent ?? null) : (document.querySelector('main li a[href^="/spot/"]')?.textContent ?? null)`
   let shown = null
   for (let i = 0; i < 100 && !shown; i++) {
-    const r = await cdp.send('Runtime.evaluate', { expression: 'document.querySelector("h1")?.textContent ?? null', returnByValue: true })
+    const r = await cdp.send('Runtime.evaluate', { expression: SHOWN, returnByValue: true })
     shown = r.result.value
     if (!shown) await sleep(200)
   }
@@ -92,7 +94,7 @@ async function visit(cdp, { offline = false, profile } = {}) {
     expression: `({
       fcp: performance.getEntriesByName('first-contentful-paint')[0]?.startTime ?? null,
       lcp: window.__lcp,
-      verdict: document.querySelector('h1')?.textContent ?? null,
+      verdict: ${SHOWN},
       offlineNotice: document.body.innerText.includes('offline'),
       swControlled: !!navigator.serviceWorker.controller,
     })`,

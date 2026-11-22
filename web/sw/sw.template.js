@@ -79,3 +79,43 @@ self.addEventListener('fetch', (event) => {
     ),
   )
 })
+
+// ---------- Surf alerts (web push, sent by jobs/notify.py) ----------
+
+self.addEventListener('push', (event) => {
+  let data = {}
+  try {
+    data = event.data ? event.data.json() : {}
+  } catch {
+    data = { body: event.data ? event.data.text() : '' }
+  }
+  // Every push MUST show a notification (iOS revokes push permission otherwise).
+  event.waitUntil(
+    self.registration.showNotification(data.title || 'Surf alert', {
+      body: data.body || '',
+      tag: data.tag || 'surf-alert', // a newer alert for the same spot replaces the old one
+      icon: '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+      data: { url: typeof data.url === 'string' && data.url.startsWith('/') ? data.url : '/' },
+    }),
+  )
+})
+
+// Tapping the alert opens that spot's page: in an open app window if there is one.
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close()
+  const url = new URL(event.notification.data?.url || '/', self.location.origin).href
+  event.waitUntil(
+    (async () => {
+      const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+      for (const win of wins) {
+        if (new URL(win.url).origin !== self.location.origin) continue
+        await win.focus()
+        if (win.url !== url && 'navigate' in win) await win.navigate(url).catch(() => {})
+        return
+      }
+      await self.clients.openWindow(url)
+    })(),
+  )
+})
+
