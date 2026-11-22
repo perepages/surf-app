@@ -4,6 +4,7 @@ import { useReducedMotion } from 'framer-motion'
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis, type TooltipContentProps } from 'recharts'
 import type { NameType, ValueType } from 'recharts/types/component/DefaultTooltipContent'
 import { averageMiss, type ChartRow } from '../lib/chartData'
+import { learnedFrom, type ModelInfo } from '../lib/modelInfo'
 
 // Series colours, validated for the dark surface with the dataviz palette checker
 // (lightness band, chroma, colour-blind separation, contrast). Each series also has its own
@@ -16,7 +17,7 @@ const SERIES = [
 
 const fmt = (x: number | null | undefined) => (x == null ? '–' : x.toFixed(1))
 
-export default function ForecastVsSurfers({ rows }: { rows: ChartRow[] }) {
+export default function ForecastVsSurfers({ rows, model }: { rows: ChartRow[]; model?: ModelInfo | null }) {
   const reduce = useReducedMotion()
   const hasAi = rows.some((r) => r.ai != null)
   const hasSurfers = rows.some((r) => r.surfers != null)
@@ -45,6 +46,8 @@ export default function ForecastVsSurfers({ rows }: { rows: ChartRow[] }) {
           ({simpleMiss.days} {simpleMiss.days === 1 ? 'day' : 'days'} with ratings).
         </p>
       )}
+
+      {model?.active && <AiVsForecast model={model} />}
 
       {/* Legend: always present, with each series' line style. */}
       <ul className="mt-4 flex flex-wrap gap-x-5 gap-y-1 text-sm" aria-label="Legend">
@@ -121,6 +124,59 @@ export default function ForecastVsSurfers({ rows }: { rows: ChartRow[] }) {
         </table>
       </details>
     </section>
+  )
+}
+
+const times = (n: number) => `${n} ${n === 1 ? 'time' : 'times'}`
+
+/**
+ * Per rated hour (not per day): was the AI score or the raw forecast closer to what the surfer
+ * said? Counted by the database (spot_model_info), as the app shows the scores (whole 1-5).
+ */
+function AiVsForecast({ model }: { model: ModelInfo }) {
+  const { compared, aiCloser, simpleCloser, days } = model
+  const same = Math.max(0, compared - aiCloser - simpleCloser)
+  const learned = learnedFrom(model)
+  const parts = [
+    { n: aiCloser, label: 'AI closer', color: SERIES[1].color },
+    { n: same, label: 'Same', color: '#3d6470' },
+    { n: simpleCloser, label: 'Forecast closer', color: SERIES[0].color },
+  ].filter((p) => p.n > 0)
+
+  return (
+    <div className="mt-4 max-w-[60ch]">
+      {compared > 0 ? (
+        <>
+          <p>
+            On <strong className="tabular-nums">{compared}</strong> rated {compared === 1 ? 'hour' : 'hours'} in the last{' '}
+            {days} days, the AI was closer to what surfers said <strong className="tabular-nums">{times(aiCloser)}</strong>,
+            the raw forecast <strong className="tabular-nums">{times(simpleCloser)}</strong>
+            {same > 0 ? <> (equally close {times(same)})</> : null}.
+          </p>
+          {/* One bar, split by who was closer; a 2px gap between segments, labels below. */}
+          <div className="mt-2 flex h-2 w-full gap-0.5 overflow-hidden rounded-full" aria-hidden>
+            {parts.map((p) => (
+              <span key={p.label} style={{ flexGrow: p.n, backgroundColor: p.color }} className="h-full first:rounded-l-full last:rounded-r-full" />
+            ))}
+          </div>
+          <ul className="mt-1 flex flex-wrap gap-x-4 text-xs text-mist" aria-hidden>
+            {parts.map((p) => (
+              <li key={p.label} className="flex items-center gap-1.5 tabular-nums">
+                <span className="size-2 rounded-full" style={{ backgroundColor: p.color }} />
+                {p.label} {p.n}
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <p className="text-sm text-mist">No rated hours with an AI score in the last {days} days yet.</p>
+      )}
+      {learned && (
+        <p className="mt-2 text-sm text-mist">
+          The AI score has {learned.charAt(0).toLowerCase() + learned.slice(1)} so far. Every rating helps it.
+        </p>
+      )}
+    </div>
   )
 }
 

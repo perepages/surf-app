@@ -18,6 +18,8 @@ export interface Score {
   source: 'simple' | 'ai'
   /** Only for AI scores. */
   modelVersion?: string | null
+  /** Only for AI scores: what the simple rules alone said, shown smaller next to it. */
+  simple?: Score
 }
 
 export type Verdict = 'GO' | 'MAYBE' | 'SKIP'

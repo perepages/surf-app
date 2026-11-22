@@ -33,6 +33,11 @@ export const ConditionsPanel = memo(function ConditionsPanel({ spot, hour, next,
           {isNow ? 'Now' : `${weekday(hour.time, timezone)} ${hhmm(hour.time, timezone)}`}
         </h2>
         <span className="text-mist">{score.label}</span>
+        {score.simple && (
+          <span className="ml-auto text-right text-xs text-mist tabular-nums">
+            AI-corrected · forecast alone {score.simple.value}
+          </span>
+        )}
       </div>
 
       <WaveScene heightM={hour.waveHeight} periodS={period}>

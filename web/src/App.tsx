@@ -8,6 +8,7 @@ import { TideCurve } from './components/TideCurve'
 import { TodayReports } from './components/TodayReports'
 import { buildChartRows } from './lib/chartData'
 import { CHART_DAYS, useReports, type ReportsState } from './lib/reports'
+import { learnedFrom, useModelInfo, type ModelInfo } from './lib/modelInfo'
 import { Verdict } from './components/Verdict'
 import { dayOfMonth, hhmm, localDate, weekday } from './lib/format'
 import type { ForecastDay, HourConditions } from './lib/openMeteo'
@@ -94,6 +95,7 @@ export default function App() {
   const [reportsKey, setReportsKey] = useState(0)
   const onRatingSent = useCallback(() => setReportsKey((k) => k + 1), [])
   const reports = useReports(DEFAULT_SPOT_ID, reportsKey)
+  const model = useModelInfo(DEFAULT_SPOT_ID)
 
   return (
     // reducedMotion="user": Framer skips transform/layout animations when the OS asks for less motion.
@@ -128,7 +130,7 @@ export default function App() {
         </main>
       )}
       {!showPrivacy && state.status === 'ready' && (
-        <SpotScreen {...state} now={now} online={online} reports={reports} onRatingSent={onRatingSent} />
+        <SpotScreen {...state} now={now} online={online} reports={reports} model={model} onRatingSent={onRatingSent} />
       )}
 
       {/* Hidden while loading, so it doesn't jump down when the forecast appears. */}
@@ -154,10 +156,11 @@ interface ScreenProps {
   now: number
   online: boolean
   reports: ReportsState
+  model: ModelInfo | null
   onRatingSent: () => void
 }
 
-function SpotScreen({ spot, forecast, stale, refreshing, ai, now, online, reports, onRatingSent }: ReadyState & ScreenProps) {
+function SpotScreen({ spot, forecast, stale, refreshing, ai, now, online, reports, model, onRatingSent }: ReadyState & ScreenProps) {
   const tz = forecast.timezone
   // Scores for every fetched hour, yesterday included (ratings need them).
   const scores = useMemo(() => {
@@ -237,7 +240,7 @@ function SpotScreen({ spot, forecast, stale, refreshing, ai, now, online, report
       )}
 
       {nowHour && (
-        <Verdict score={scores.get(nowHour.time)!} timezone={tz} firstLight={firstLight} now={now} />
+        <Verdict score={scores.get(nowHour.time)!} timezone={tz} firstLight={firstLight} now={now} learnedFrom={learnedFrom(model)} />
       )}
 
       <div className="px-4 pb-10 sm:px-8">
@@ -293,7 +296,7 @@ function SpotScreen({ spot, forecast, stale, refreshing, ai, now, online, report
 
       {chartRows.length > 1 && (
         <WhenNear placeholder="h-[34rem]" margin="200px" what="the forecast vs surfers chart">
-          <ForecastVsSurfers rows={chartRows} />
+          <ForecastVsSurfers rows={chartRows} model={model} />
         </WhenNear>
       )}
     </main>

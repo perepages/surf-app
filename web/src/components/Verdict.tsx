@@ -14,10 +14,12 @@ interface Props {
   firstLight: number | null
   /** Unix seconds. */
   now: number
+  /** "Learned from 212 surfer reports", shown under an AI score; null = not shown. */
+  learnedFrom?: string | null
 }
 
 /** GO / MAYBE / SKIP for the current hour. */
-export const Verdict = memo(function Verdict({ score, timezone, firstLight, now }: Props) {
+export const Verdict = memo(function Verdict({ score, timezone, firstLight, now, learnedFrom }: Props) {
   const word = verdictFor(score.value)
   const still = useReducedMotion()
 
@@ -52,8 +54,15 @@ export const Verdict = memo(function Verdict({ score, timezone, firstLight, now 
           <span className="text-mist">/5</span> {score.label}
         </span>
         {score.source === 'ai' && <AiBadge />}
+        {score.simple && (
+          // What the plain forecast rules said, smaller: the gap is the AI's correction.
+          <span className="text-sm text-mist tabular-nums">
+            Forecast alone {score.simple.value}/5 {score.simple.label}
+          </span>
+        )}
       </div>
       <p className="mt-1 max-w-[38ch] text-lg leading-snug">{score.reason}</p>
+      {score.source === 'ai' && learnedFrom && <p className="mt-1 text-sm text-mist">{learnedFrom}</p>}
       {firstLight != null && <p className="mt-1 text-mist">It's dark. First light at {hhmm(firstLight, timezone)}.</p>}
     </section>
   )

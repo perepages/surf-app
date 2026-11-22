@@ -17,5 +17,6 @@ export function resolveScore(h: HourConditions, spot: Spot, ai?: AiPrediction): 
     reason: ai.reason?.trim() || simple.reason,
     source: 'ai',
     modelVersion: ai.modelVersion,
+    simple,
   }
 }
