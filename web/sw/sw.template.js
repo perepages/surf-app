@@ -96,7 +96,8 @@ self.addEventListener('push', (event) => {
       tag: data.tag || 'surf-alert', // a newer alert for the same spot replaces the old one
       icon: '/icons/icon-192.png',
       badge: '/icons/icon-192.png',
-      data: { url: typeof data.url === 'string' && data.url.startsWith('/') ? data.url : '/' },
+      // Only paths on this site ('//other.site' would leave it).
+      data: { url: typeof data.url === 'string' && /^\/(?!\/)/.test(data.url) ? data.url : '/' },
     }),
   )
 })
@@ -111,8 +112,10 @@ self.addEventListener('notificationclick', (event) => {
       for (const win of wins) {
         if (new URL(win.url).origin !== self.location.origin) continue
         await win.focus()
-        if (win.url !== url && 'navigate' in win) await win.navigate(url).catch(() => {})
-        return
+        if (win.url === url) return
+        // navigate() only works on windows this worker controls; otherwise open a new one.
+        if ('navigate' in win && (await win.navigate(url).catch(() => null))) return
+        break
       }
       await self.clients.openWindow(url)
     })(),

@@ -2,3 +2,8 @@
 # Installed ONLY inside GitHub Actions (collect.yml), never locally and never in
 # jobs/requirements.txt (decided 2026-11-22). notify.py --dry-run works without it.
 pywebpush==2.0.3
+# Its sub-dependencies, capped below their next major version so an unattended hourly run
+# can't break overnight on a new release. py-vapid must read our raw 32-byte private key.
+py-vapid>=1.9,<2
+http-ece>=1.1,<2
+cryptography>=42,<51

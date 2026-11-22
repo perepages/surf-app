@@ -588,7 +588,7 @@ Spots are **config-driven**, so more can be added later without code changes.
 - [x] Step 27 (2026-11-22): optional surf alerts by web push. **New library (approved): `pywebpush`
   2.0.3** in `jobs/requirements-push.txt`, installed ONLY in GitHub Actions (not in
   `jobs/requirements.txt`, never locally). No new npm packages.
-  - Migration `...0013_push_alerts` (**not applied yet**): `push_subscriptions` (endpoint, p256dh,
+  - Migration `...0013_push_alerts` (applied 2026-11-22, checked live): `push_subscriptions` (endpoint, p256dh,
     auth, spot_id, min_score 2-5, last_sent_at, notified_until, failures; unique endpoint+spot; no
     public access) + public SECURITY DEFINER `push_subscribe` (only real push services: FCM,
     Mozilla, Apple, Windows; spot must be active; max 10 spots per phone; changing the score
@@ -622,21 +622,53 @@ Spots are **config-driven**, so more can be added later without code changes.
     on the prod build: service worker ready, real subscription with our VAPID key (FCM endpoint,
     keys OK), notifications show; saving failed with 404 as expected (migration 13 missing).
     Sheet checked at phone size (blocked + picker states). `tsc`, lint, build pass.
-  - **Not tested end to end** (needs migration 13, the GitHub secrets, Vercel env and a push to
-    `main`): pywebpush actually sending, delivery to a real Android phone / iPhone, tap opening
-    the spot. Not handled: `pushsubscriptionchange` (Firefox can rotate a subscription; the
+  - Live since 0.4.0: migration 13 applied, Vercel public key in the bundle, GitHub secrets
+    found (the alerts step ran in the 18:10 UTC manual run). **Still unconfirmed: a push actually
+    delivered to a phone** (no alert existed at a send so far) and the tap opening the spot. Not handled: `pushsubscriptionchange` (Firefox can rotate a subscription; the
     old one gets 410 and is deleted, the user must turn the alert on again). Anyone with the
     public key could add fake subscriptions on real push hosts; they die at the first send (404).
 - [x] Released 2026-11-22: steps 25-27 as app **0.4.0** (`main` fast-forwarded to `test-preview`
-  and pushed; Vercel deploys production from `main`). At release: migration 13 not applied and
-  the VAPID secrets/Vercel variable not set yet, so alerts show "not switched on" / can't be
-  saved and the hourly alerts step is skipped until then.
+  and pushed; Vercel deploys production from `main`). Same day: migration 13 applied, VAPID
+  secrets in GitHub and `VITE_VAPID_PUBLIC_KEY` in Vercel (all confirmed live).
 - [x] Fix 2026-11-22 (after the 0.4.0 release): turning on an alert showed "Unexpected end of JSON
   input" although the alert WAS saved: `push_subscribe` returns nothing (HTTP 204, empty body)
   and `rpc()` in `lib/supabase.ts` always parsed JSON. `rpc()` now returns null for an empty
   body. Checked with headless Chrome on the prod build against the live database: on -> "Done",
   button "Alert 4+", off -> row deleted. Migration 13 and the Vercel public key confirmed live
   (bundle has the key; functions answer; fake endpoint refused; table not readable publicly).
+- [x] Review of steps 25-27 (2026-11-22): no keys, passwords or `.env` in any file, in `web/dist`
+  or anywhere in git history (checked by value: VAPID private key, service key, Windy key, admin
+  password; and by pattern). The browser only gets `VITE_SUPABASE_URL`, the publishable key and
+  the VAPID public key. pywebpush 2.0.3 / py-vapid source checked: `webpush()` arguments match
+  and py-vapid reads our raw 32-byte private key. Fixed:
+  - **A push-service or network outage would have deleted every alert**: `notify.py` counted any
+    failed send towards the 10-failures removal. Now network errors, 429 and 5xx are retried
+    next hour without counting; only the phone's own rejections (400-type, unusable keys) count;
+    401/403 (our key) never count and turn the step red.
+  - **One error stopped all alerts**: a network exception from pywebpush (requests), a failed
+    predictions read, a bad time zone or a failed database write after a send crashed the whole
+    run. Now isolated per spot and per alert (`notify_spot` / `notify_one`); `Sender.send` never
+    raises. Paused spots (`active = false`) are skipped quietly instead of warning every hour.
+  - **Alerts for other spots could silently disappear** on browsers that don't report the
+    subscription's key (`options.applicationServerKey` null): every "Turn on" made a new push
+    address and left the other spots on the old one. Now only a KNOWN different key resubscribes;
+    when the push address changes, all of the phone's alerts are re-saved under the new one
+    (`surf:push-endpoint` remembers the last one), and opening a spot page repairs alerts the job
+    dropped after the browser renewed its address (only with permission granted).
+  - `jobs/requirements-push.txt`: py-vapid, http-ece, cryptography capped below their next major
+    version (an unattended run can't break on a new release); pip cache covers that file.
+  - Service worker: alert URLs must be a path on this site (`//other.site` refused); tapping an
+    alert opens a new window when the open one can't be navigated (not controlled by the worker).
+  - Map: only click/Enter opens a spot (any key press on a focused marker did).
+  - At most 6 spot forecasts saved on the phone (oldest dropped): a full localStorage would also
+    stop the device id and the rating limit from saving.
+  Tested: mocked notify run (sent, 410 removed, 400 x10 removed, 500 / network / 429 kept and
+  retried, 403 fails without counting, paused spot, broken spot and failed write isolated) and
+  the real `Sender` with a fake pywebpush (exceptions -> codes, claims not reused). Headless
+  Chrome on the prod build against the live database: alert on -> "Done", simulated renewed push
+  address -> alert re-saved on reopen, off -> row and endpoint key removed (no test rows left);
+  cache cap kept the 6 newest. Live `notify --dry-run` OK. `tsc`, lint, build pass.
+  **Not deployed yet** (on `test-preview`, not `main`).
 - [ ] Before printing posters: pick the main address (see open items) and fill `CONTACT` in
   `PrivacyPage.tsx`.
 - [x] Step 23 (2026-11-22): laptop footprint check (nothing deleted).
@@ -690,10 +722,24 @@ Spots are **config-driven**, so more can be added later without code changes.
   - Bump `web/package.json` version on releases: it's the `app_version` stored with ratings
     (the service worker cache updates on its own from file hashes).
   - No automated tests and no ESLint config in `web/` (type-check only: `npx tsc -b`).
-  - **Scheduled runs not seen yet** (see the review of steps 17-24): check Actions > Hourly
-    collect for runs marked "schedule". If none appear, disable + re-enable the workflow
-    or push a commit that touches it. Manual runs from GitHub worked (PORTUS, Windy and
-    Open-Meteo all answered GitHub's servers on 2026-11-22).
+  - **Scheduled runs still never seen** (checked 18:19 UTC on 2026-11-22, after the 0.4.0 push
+    changed `collect.yml`): only manual runs in Actions, for both workflows. Without them there
+    is no hourly data, no predictions and **no surf alerts**. Next: Actions > Hourly collect >
+    "..." > Disable workflow, then Enable; if still nothing, trigger `workflow_dispatch` from an
+    outside scheduler (needs a GitHub token with workflow scope).
+  - Surf alerts: anyone with the public key can add fake subscriptions on real push hosts. With a
+    good window they die at the first send (404), but alerts that never trigger (e.g. min 5) stay
+    forever. Add a total row cap or a per-hour insert limit in a migration if spam appears.
+  - Surf alerts use the latest `predictions` even if the predict step has been failing (it warns
+    when the forecast is > 3 h old; notify doesn't check again).
+  - `check_connections.py` doesn't check that `VAPID_PRIVATE_KEY` matches `VITE_VAPID_PUBLIC_KEY`;
+    a mismatch shows only as 401/403 in the alerts step.
+  - A spot set to `active = false` disappears from the list, but its page (`/spot/<id>`) still
+    shows the copy saved on phones that opened it before.
+  - Home screen: one `spot_reports_today` call per spot per refresh, and all spots in one
+    Open-Meteo URL; fine for tens of spots, revisit at ~100.
+  - No way to edit or delete a spot except the Supabase table editor (`add_spot.py` only adds).
+  - OpenStreetMap's public tiles are fine for low traffic; a busy app needs a tile provider.
   - **No alert when runs silently stop** (GitHub only emails failed runs). Idea: show "last
     forecast stored" in `/admin`, or a free uptime pinger on a tiny status endpoint.
   - Hourly predict (collect, :17) and the nightly one (03:23) are in different concurrency

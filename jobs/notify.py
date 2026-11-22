@@ -13,7 +13,10 @@ For every alert in `push_subscriptions` (a phone + a spot + a minimum score, mig
      each alert sends at most once per 12 h (a forecast flickering around the threshold would
      otherwise alert every hour).
 The push service's answer: 404/410 = the phone unsubscribed or the app was removed -> the row is
-deleted. Other errors count up `failures`; 10 in a row -> deleted.
+deleted. 400-type rejections (or unusable keys) count up `failures`; 10 in a row -> deleted.
+Network errors, 429 and 5xx are outages (ours or theirs): retried next hour, never counted, so
+a long outage can't wipe everyone's alerts. 401/403 = our VAPID key is wrong: step fails.
+One spot or one alert failing never stops the others.
 
 Run from the repo root:
   python -m jobs.notify               # send
@@ -43,6 +46,8 @@ JOB = "notify"
 HORIZON = timedelta(hours=24)
 MIN_GAP = timedelta(hours=12)       # at most one alert per subscription in this time
 DROP_AFTER_FAILURES = 10
+NETWORK_ERROR = 0       # push service unreachable (our side or theirs)
+BAD_SUBSCRIPTION = -1   # the stored keys are unusable
 LABELS = {1: "Flat", 2: "Small", 3: "Fun", 4: "Good", 5: "Epic"}
 UTC = timezone.utc
 
@@ -155,7 +160,8 @@ class Sender:
         self.claims = {"sub": subject if subject.startswith(("mailto:", "https://")) else f"mailto:{subject}"}
 
     def send(self, sub: dict[str, Any], payload: dict[str, Any], ttl: int) -> int:
-        """HTTP status from the push service (201 = accepted)."""
+        """HTTP status from the push service (201 = accepted); NETWORK_ERROR if it couldn't be
+        reached; BAD_SUBSCRIPTION if this row's keys can't be used to encrypt. Never raises."""
         try:
             resp = self._webpush(
                 subscription_info={"endpoint": sub["endpoint"],
@@ -169,11 +175,118 @@ class Sender:
             )
             return getattr(resp, "status_code", 201)
         except self._error as exc:
-            return exc.response.status_code if exc.response is not None else 0
+            return exc.response.status_code if exc.response is not None else NETWORK_ERROR
+        except (ValueError, TypeError, KeyError):
+            return BAD_SUBSCRIPTION  # malformed p256dh/auth: encryption fails for this row only
+        except Exception:  # requests timeouts, connection resets, DNS: not the phone's fault
+            return NETWORK_ERROR
 
 
 def host(endpoint: str) -> str:
     return urllib.parse.urlsplit(endpoint).hostname or "?"
+
+
+def notify_one(db: NotifySupabase, sender: Sender | None, spot: dict[str, Any], sub: dict[str, Any],
+               hours: list[dict[str, Any]], now: datetime, test: bool, label: str) -> int:
+    """One alert: decide, send, record. Returns 1 if the step should turn red."""
+    spot_id = spot["id"]
+    if test:
+        payload = {"title": f"Test alert: {spot['name'].split('(')[0].strip()}",
+                   "body": f"Alerts work. You'll hear when it's {sub['min_score']}/5 or better.",
+                   "url": f"/spot/{spot_id}", "tag": f"alert-{spot_id}"}
+        window = None
+    else:
+        window = good_window(hours, sub["min_score"])
+        if window is None:
+            log.ok(JOB, f"{label} nothing that good in the next 24 h of daylight")
+            return 0
+        told = sub.get("notified_until")
+        if told and window["end"] <= utc(told):
+            log.ok(JOB, f"{label} already told about this window")
+            return 0
+        last = sub.get("last_sent_at")
+        if last and now - utc(last) < MIN_GAP:
+            log.ok(JOB, f"{label} new window, but last alert was < 12 h ago")
+            return 0
+        payload = message(spot, window, now, sub["min_score"])
+
+    if sender is None:
+        log.ok(JOB, f"{label} would send: {payload['title']}")
+        return 0
+    ttl = 3600 if window is None else max(600, int((window["end"] - now).total_seconds()))
+    status = sender.send(sub, payload, ttl)
+
+    if 200 <= status < 300:
+        if window is not None:
+            db.patch_sub(sub["id"], {"last_sent_at": iso(now), "notified_until": iso(window["end"]),
+                                     "failures": 0})
+        log.ok(JOB, f"{label} sent: {payload['title']}")
+        return 0
+    if status in (404, 410):
+        db.delete_sub(sub["id"])
+        log.ok(JOB, f"{label} push service says gone ({status}); alert removed")
+        return 0
+    if status in (401, 403):
+        # Our signature is wrong (keys don't match): not this phone's fault, never counted.
+        log.fail(JOB, f"{label} push service refused our VAPID signature (HTTP {status}): check "
+                      "VAPID_PRIVATE_KEY matches VITE_VAPID_PUBLIC_KEY in Vercel")
+        return 1
+    if status == NETWORK_ERROR or status == 429 or status >= 500:
+        # Outage on our side or the push service's: retried next hour, never counted, so a long
+        # outage can't delete everyone's alerts.
+        log.warn(JOB, f"{label} push service unreachable/busy ({status or 'network'}); next hour")
+        return 1
+    # 400/413/... or unusable keys: something is wrong with this subscription itself.
+    failures = int(sub.get("failures") or 0) + 1
+    if failures >= DROP_AFTER_FAILURES:
+        db.delete_sub(sub["id"])
+        log.warn(JOB, f"{label} rejected {failures} times in a row (last {status}); removed")
+        return 0
+    db.patch_sub(sub["id"], {"failures": failures})
+    log.warn(JOB, f"{label} rejected (HTTP {status}), try {failures} of {DROP_AFTER_FAILURES}")
+    return 1
+
+
+def notify_spot(db: NotifySupabase, sender: Sender | None, spot: dict[str, Any] | None, spot_id: str,
+                spot_subs: list[dict[str, Any]], now: datetime, test: bool) -> int:
+    """Alerts for one spot. Returns how many sends failed in a way that should turn the step red."""
+    failed = 0
+    if spot is None:
+        log.warn(JOB, f"[{spot_id}] spot not found; {len(spot_subs)} alert(s) skipped")
+        return 0
+    if not spot.get("active", True):
+        log.ok(JOB, f"[{spot_id}] spot is paused (active = false); {len(spot_subs)} alert(s) wait")
+        return 0
+    hours: list[dict[str, Any]] = []
+    if not test:
+        try:
+            windows = daylight_windows(spot["lat"], spot["lon"])
+        except Exception as exc:
+            log.warn(JOB, f"[{spot_id}] sun times unavailable ({type(exc).__name__}); "
+                          "using 06-18 UTC as daylight")
+            windows = None
+        rows = db.get("predictions", {
+            "select": "valid_at,simple_score,ai_score", "spot_id": f"eq.{spot_id}",
+            "and": f"(valid_at.gte.{iso(now - timedelta(hours=1))},valid_at.lt.{iso(now + HORIZON)})",
+            "order": "valid_at",
+        })
+        for r in rows:
+            at = utc(r["valid_at"])
+            if at + timedelta(hours=1) <= now or not is_daylight(at, windows):
+                continue  # hour already over, or dark
+            score, ai = shown_score(r)
+            hours.append({"at": at, "score": score, "ai": ai})
+        if not rows:
+            log.warn(JOB, f"[{spot_id}] no predictions for the next 24 h (predict step failed?)")
+
+    for sub in spot_subs:
+        label = f"[{spot_id} #{sub['id']} {host(sub['endpoint'])} min {sub['min_score']}]"
+        try:
+            failed += notify_one(db, sender, spot, sub, hours, now, test, label)
+        except Exception as exc:  # e.g. the database write after a send failed
+            failed += 1
+            log.fail(JOB, f"{label} {type(exc).__name__}: {exc}")
+    return failed
 
 
 def main() -> int:
@@ -218,86 +331,15 @@ def main() -> int:
 
     spot_ids = sorted({s["spot_id"] for s in subs})
     spots = {s["id"]: s for s in db.get("spots", {
-        "select": "id,name,lat,lon,timezone", "id": f"in.({','.join(spot_ids)})"})}
+        "select": "id,name,lat,lon,timezone,active", "id": f"in.({','.join(spot_ids)})"})}
     failed = 0
     for spot_id in spot_ids:
-        spot = spots.get(spot_id)
         spot_subs = [s for s in subs if s["spot_id"] == spot_id]
-        if spot is None:
-            log.warn(JOB, f"[{spot_id}] spot not found; {len(spot_subs)} alert(s) skipped")
-            continue
-        hours: list[dict[str, Any]] = []
-        if not args.test:
-            try:
-                windows = daylight_windows(spot["lat"], spot["lon"])
-            except Exception as exc:
-                log.warn(JOB, f"[{spot_id}] sun times unavailable ({type(exc).__name__}); "
-                              "using 06-18 UTC as daylight")
-                windows = None
-            rows = db.get("predictions", {
-                "select": "valid_at,simple_score,ai_score", "spot_id": f"eq.{spot_id}",
-                "and": f"(valid_at.gte.{iso(now - timedelta(hours=1))},valid_at.lt.{iso(now + HORIZON)})",
-                "order": "valid_at",
-            })
-            for r in rows:
-                at = utc(r["valid_at"])
-                if at + timedelta(hours=1) <= now or not is_daylight(at, windows):
-                    continue  # hour already over, or dark
-                score, ai = shown_score(r)
-                hours.append({"at": at, "score": score, "ai": ai})
-            if not rows:
-                log.warn(JOB, f"[{spot_id}] no predictions for the next 24 h (predict step failed?)")
-
-        for sub in spot_subs:
-            label = f"[{spot_id} #{sub['id']} {host(sub['endpoint'])} min {sub['min_score']}]"
-            if args.test:
-                payload = {"title": f"Test alert: {spot['name'].split('(')[0].strip()}",
-                           "body": f"Alerts work. You'll hear when it's {sub['min_score']}/5 or better.",
-                           "url": f"/spot/{spot_id}", "tag": f"alert-{spot_id}"}
-                window = None
-            else:
-                window = good_window(hours, sub["min_score"])
-                if window is None:
-                    log.ok(JOB, f"{label} nothing that good in the next 24 h of daylight")
-                    continue
-                told = sub.get("notified_until")
-                if told and window["end"] <= utc(told):
-                    log.ok(JOB, f"{label} already told about this window")
-                    continue
-                last = sub.get("last_sent_at")
-                if last and now - utc(last) < MIN_GAP:
-                    log.ok(JOB, f"{label} new window, but last alert was < 12 h ago")
-                    continue
-                payload = message(spot, window, now, sub["min_score"])
-
-            if sender is None:
-                log.ok(JOB, f"{label} would send: {payload['title']}")
-                continue
-            ttl = 3600 if window is None else max(600, int((window["end"] - now).total_seconds()))
-            status = sender.send(sub, payload, ttl)
-            if 200 <= status < 300:
-                if window is not None:
-                    db.patch_sub(sub["id"], {"last_sent_at": iso(now), "notified_until": iso(window["end"]),
-                                             "failures": 0})
-                log.ok(JOB, f"{label} sent: {payload['title']}")
-            elif status in (401, 403):
-                # Our signature is wrong (keys don't match): not this phone's fault, so never
-                # count it towards removing the alert.
-                failed += 1
-                log.fail(JOB, f"{label} push service refused our VAPID signature (HTTP {status}): check "
-                              "VAPID_PRIVATE_KEY matches VITE_VAPID_PUBLIC_KEY in Vercel")
-            elif status in (404, 410):
-                db.delete_sub(sub["id"])
-                log.ok(JOB, f"{label} push service says gone ({status}); alert removed")
-            else:
-                failures = int(sub.get("failures") or 0) + 1
-                if failures >= DROP_AFTER_FAILURES:
-                    db.delete_sub(sub["id"])
-                    log.warn(JOB, f"{label} failed {failures} times in a row (last {status}); removed")
-                else:
-                    db.patch_sub(sub["id"], {"failures": failures})
-                    failed += 1
-                    log.warn(JOB, f"{label} send failed (HTTP {status or 'network'}), try {failures}")
+        try:
+            failed += notify_spot(db, sender, spots.get(spot_id), spot_id, spot_subs, now, args.test)
+        except Exception as exc:  # one spot's problem must not stop the others
+            failed += 1
+            log.fail(JOB, f"[{spot_id}] {type(exc).__name__}: {exc}")
     return 1 if failed else 0
 
 

@@ -60,10 +60,20 @@ function keyBytes(base64url: string): Uint8Array<ArrayBuffer> {
   return out
 }
 
-const sameKey = (a: ArrayBuffer | null, b: Uint8Array) => {
-  if (!a || a.byteLength !== b.byteLength) return false
+/** False only when the subscription is KNOWN to use another key. Some browsers don't report the
+ *  key (null): treat that as the same, or every tap would make a new subscription and orphan the
+ *  alerts of the other spots. */
+const notOtherKey = (a: ArrayBuffer | null | undefined, b: Uint8Array) => {
+  if (!a) return true
+  if (a.byteLength !== b.byteLength) return false
   const x = new Uint8Array(a)
   return x.every((v, i) => v === b[i])
+}
+
+function subscribeArgs(sub: PushSubscription) {
+  const json = sub.toJSON()
+  if (!json.endpoint || !json.keys?.p256dh || !json.keys.auth) throw new Error('The browser gave an incomplete push subscription.')
+  return { p_endpoint: json.endpoint, p_p256dh: json.keys.p256dh, p_auth: json.keys.auth }
 }
 
 async function registration(): Promise<ServiceWorkerRegistration> {
@@ -97,25 +107,49 @@ export async function enableAlert(spotId: string, minScore: number): Promise<voi
   const key = keyBytes(PUBLIC_KEY)
   let sub = await reg.pushManager.getSubscription()
   // Subscribed earlier with another key (keys were replaced): start over.
-  if (sub && !sameKey(sub.options.applicationServerKey, key)) {
+  if (sub && !notOtherKey(sub.options?.applicationServerKey, key)) {
     await sub.unsubscribe()
     sub = null
   }
+  const previous = readLastEndpoint()
   sub ??= await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key })
-  const json = sub.toJSON()
-  if (!json.endpoint || !json.keys?.p256dh || !json.keys.auth) throw new Error('The browser gave an incomplete push subscription.')
+  const args = subscribeArgs(sub)
+  const alerts = { ...readLocalAlerts(), [spotId]: minScore }
   try {
-    await rpc<null>('push_subscribe', {
-      p_endpoint: json.endpoint,
-      p_p256dh: json.keys.p256dh,
-      p_auth: json.keys.auth,
-      p_spot_id: spotId,
-      p_min_score: minScore,
-    })
+    await rpc<null>('push_subscribe', { ...args, p_spot_id: spotId, p_min_score: minScore })
+    // New push address (first alert, browser renewed it, or keys replaced): move this phone's
+    // other alerts to it, else they'd stay on the dead address and vanish at the next send.
+    if (previous && previous !== args.p_endpoint) await moveAlerts(args, alerts, spotId)
   } catch (err) {
     throw new Error(`Couldn’t save the alert (${err instanceof Error ? err.message : String(err)}). Try again in a moment.`)
   }
-  writeLocalAlerts({ ...readLocalAlerts(), [spotId]: minScore })
+  writeLastEndpoint(args.p_endpoint)
+  writeLocalAlerts(alerts)
+}
+
+const ENDPOINT_KEY = 'surf:push-endpoint' // to notice when the browser's push address changes
+function readLastEndpoint(): string | null {
+  try {
+    return localStorage.getItem(ENDPOINT_KEY)
+  } catch {
+    return null
+  }
+}
+function writeLastEndpoint(endpoint: string | null) {
+  try {
+    if (endpoint) localStorage.setItem(ENDPOINT_KEY, endpoint)
+    else localStorage.removeItem(ENDPOINT_KEY)
+  } catch {
+    /* only used to repair alerts */
+  }
+}
+
+/** Re-saves every alert of this phone under the current push address (except `skip`). */
+async function moveAlerts(args: ReturnType<typeof subscribeArgs>, alerts: Record<string, number>, skip?: string) {
+  for (const [spot, min] of Object.entries(alerts)) {
+    if (spot === skip) continue
+    await rpc<null>('push_subscribe', { ...args, p_spot_id: spot, p_min_score: min }).catch(() => {})
+  }
 }
 
 /** Turns one spot's alert off; when none are left, the phone's push subscription goes too. */
@@ -125,7 +159,10 @@ export async function disableAlert(spotId: string): Promise<void> {
   delete local[spotId]
   if (sub) {
     await rpc<number>('push_unsubscribe', { p_endpoint: sub.endpoint, p_spot_id: spotId })
-    if (Object.keys(local).length === 0) await sub.unsubscribe().catch(() => {})
+    if (Object.keys(local).length === 0) {
+      await sub.unsubscribe().catch(() => {})
+      writeLastEndpoint(null)
+    }
   }
   writeLocalAlerts(local)
 }
@@ -141,10 +178,18 @@ export async function syncAlerts(): Promise<Record<string, number>> {
     const sub = await currentSubscription()
     if (!sub) {
       writeLocalAlerts({})
+      writeLastEndpoint(null)
       return {}
     }
     const rows = await rpc<{ spot_id: string; min_score: number }[]>('push_alerts', { p_endpoint: sub.endpoint })
-    const fresh = Object.fromEntries(rows.map((r) => [r.spot_id, r.min_score]))
+    let fresh: Record<string, number> = Object.fromEntries(rows.map((r) => [r.spot_id, r.min_score]))
+    // The browser renewed its push address (the job then deletes the old rows as "gone"): the
+    // database has nothing for the new one but this phone still wants its alerts. Re-save them.
+    if (rows.length === 0 && Object.keys(local).length > 0 && sub.endpoint !== readLastEndpoint() && Notification.permission === 'granted') {
+      await moveAlerts(subscribeArgs(sub), local)
+      fresh = local
+    }
+    writeLastEndpoint(sub.endpoint)
     writeLocalAlerts(fresh)
     return fresh
   } catch {

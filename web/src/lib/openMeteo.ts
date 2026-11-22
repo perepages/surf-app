@@ -19,6 +19,8 @@ import {
 import { OPEN_METEO_TIMEOUT_MS, untilAbort, withTimeout } from './http'
 
 const CACHE_VERSION = 3 // bump when the cached shape or request changes
+/** Spots whose full forecast stays saved on the phone (opens offline). */
+const MAX_SAVED_SPOTS = 6
 
 export interface HourConditions {
   /** Unix seconds, UTC. */
@@ -196,6 +198,14 @@ function writeCache(spot: Spot, f: Forecast) {
     for (const k of Object.keys(localStorage)) {
       if (!k.startsWith('surf:forecast:') || k === cacheKey(spot)) continue
       if (!k.startsWith(current) || k.startsWith(`${current}${spot.id}:`)) localStorage.removeItem(k)
+    }
+    // At most MAX_SAVED_SPOTS forecasts (each is tens of KB): a full storage would also stop
+    // the device id and the rating limit from being saved. Oldest fetch goes first.
+    const saved = Object.keys(localStorage).filter((k) => k.startsWith(current) && k !== cacheKey(spot))
+    if (saved.length >= MAX_SAVED_SPOTS) {
+      const age = (k: string) => Number(localStorage.getItem(`${FETCHED_AT_KEY}:${k.slice(current.length).split(':')[0]}`) || 0)
+      saved.sort((a, b) => age(a) - age(b))
+      for (const k of saved.slice(0, saved.length - MAX_SAVED_SPOTS + 1)) localStorage.removeItem(k)
     }
     localStorage.setItem(cacheKey(spot), JSON.stringify(f))
     // Small companion key: lets index.html decide whether to prefetch without parsing the forecast.

@@ -70,7 +70,7 @@ export default function SpotMap({ spots }: { spots: RankedSpot[] }) {
         permanent: spots.length <= 8, // few spots: always show names
         className: 'spot-tip',
       })
-      marker.on('click keypress', () => navigate(spotPath(s.spot.id)))
+      marker.on('click', () => navigate(spotPath(s.spot.id))) // Leaflet turns Enter on a focused marker into a click
       marker.addTo(group)
     }
     if (!fitted.current && spots.length) {

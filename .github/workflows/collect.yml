@@ -62,7 +62,9 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: jobs/requirements.txt
+          cache-dependency-path: |
+            jobs/requirements.txt
+            jobs/requirements-push.txt
       # The collectors use only the standard library; scikit-learn is installed later, only
       # for the predictions step.
 
