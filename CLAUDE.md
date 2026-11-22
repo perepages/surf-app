@@ -627,6 +627,10 @@ Spots are **config-driven**, so more can be added later without code changes.
     the spot. Not handled: `pushsubscriptionchange` (Firefox can rotate a subscription; the
     old one gets 410 and is deleted, the user must turn the alert on again). Anyone with the
     public key could add fake subscriptions on real push hosts; they die at the first send (404).
+- [x] Released 2026-11-22: steps 25-27 as app **0.4.0** (`main` fast-forwarded to `test-preview`
+  and pushed; Vercel deploys production from `main`). At release: migration 13 not applied and
+  the VAPID secrets/Vercel variable not set yet, so alerts show "not switched on" / can't be
+  saved and the hourly alerts step is skipped until then.
 - [ ] Before printing posters: pick the main address (see open items) and fill `CONTACT` in
   `PrivacyPage.tsx`.
 - [x] Step 23 (2026-11-22): laptop footprint check (nothing deleted).
