@@ -1,11 +1,28 @@
 name: Hourly collect
 
+# Runs every collector (forecast + tide, buoys, cam snapshot) as its own step, then
+# writes the predictions the app shows from the newest forecast.
+# A failing collector turns its own step red; the next steps still run (if: !cancelled()),
+# and the whole run is then marked failed so GitHub emails you.
+# Where to look: Actions tab > "Hourly collect" > a run. The Summary page lists each
+# collector's result and any warnings/errors; click a step for its full log.
+
 on:
-  workflow_dispatch: # run by hand from the Actions tab
-  # Enable once the job does real work. Cron is in UTC; an off-the-hour minute avoids
-  # GitHub's busiest slot, when scheduled runs are often delayed or dropped.
-  # schedule:
-  #   - cron: "17 * * * *" # every hour at :17
+  # The "Run workflow" button (Actions tab > Hourly collect).
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run: fetch only, write and delete nothing"
+        type: boolean
+        default: false
+      any_time:
+        description: "Take a cam snapshot even at night (testing)"
+        type: boolean
+        default: false
+  # Cron is in UTC; an off-the-hour minute avoids GitHub's busiest slot, when scheduled
+  # runs are often delayed or dropped. Schedules run only on the default branch (main).
+  schedule:
+    - cron: "17 * * * *" # every hour at :17
 
 permissions:
   contents: read # the job only needs to read the code
@@ -13,6 +30,16 @@ permissions:
 concurrency:
   group: collect # never run two at once; a new run waits for the old one
   cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: "1" # log lines appear as they happen
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+  WINDY_API_KEY: ${{ secrets.WINDY_API_KEY }}
+  # Manual-run options (empty on scheduled runs). Passed through env, never pasted into
+  # the shell script, so input text can't run as a command.
+  DRY_RUN: ${{ inputs.dry_run }}
+  ANY_TIME: ${{ inputs.any_time }}
 
 jobs:
   collect:
@@ -23,10 +50,51 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
-      # Dependencies are installed once the job needs them:
-      # - run: pip install -r jobs/requirements.txt
-      - run: python -m jobs.collect
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          WINDY_API_KEY: ${{ secrets.WINDY_API_KEY }}
+          cache: pip
+          cache-dependency-path: jobs/requirements.txt
+      # The collectors use only the standard library; scikit-learn is installed later, only
+      # for the predictions step.
+
+      - name: Check secrets are set
+        # Says which secrets are missing (never prints values). Doesn't stop the run:
+        # each collector reports what it can't do without its secrets.
+        run: |
+          for name in SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY WINDY_API_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error title=Missing secret::$name is not set (Settings > Secrets and variables > Actions)"
+            else
+              echo "$name is set"
+            fi
+          done
+          FLAGS=""
+          [ "$DRY_RUN" = "true" ] && FLAGS="$FLAGS --dry-run"
+          [ "$ANY_TIME" = "true" ] && FLAGS="$FLAGS --any-time"
+          echo "FLAGS=$FLAGS" >> "$GITHUB_ENV"
+          echo "Collector flags:${FLAGS:- (none)}"
+
+      - name: Forecast + tide (Open-Meteo)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: python -m jobs.collect --only forecast $FLAGS
+
+      - name: Buoys (PORTUS)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: python -m jobs.collect --only buoy $FLAGS
+
+      - name: Cam snapshot + cleanup (Windy)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: python -m jobs.collect --only cam $FLAGS
+
+      # After all collectors: scores the app shows for the next 3 days from the NEWEST stored
+      # forecast (simple score, plus the AI score + reason when a model is active;
+      # jobs/predict.py). Still runs if a collector failed (then it uses the last forecast).
+      - name: Install training libraries
+        if: ${{ !cancelled() }}
+        run: pip install -r jobs/requirements.txt
+
+      - name: Predictions (simple + AI score)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: python -m jobs.predict $FLAGS

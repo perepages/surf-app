@@ -1,11 +1,31 @@
 name: Nightly train
 
+# Every night (jobs/train.py, then jobs/predict.py):
+#   1. Retrain per spot on its ratings; evaluate on the ratings of the last 14 days.
+#   2. Set is_active = true only if the new model beats BOTH the simple score and the current
+#      model (on ratings the current model never saw); otherwise the old model stays active.
+#   3. Spots with too few ratings get a general model trained on all spots (same rule).
+#   4. Write predictions for the next 3 days into `predictions`.
+# The hourly "Hourly collect" workflow also rewrites predictions after each collection, so they
+# follow the newest forecast. Where to look: Actions tab > "Nightly train" > a run; each step's
+# log says what was trained, the errors, and why a model was or wasn't activated.
+
 on:
-  workflow_dispatch: # run by hand from the Actions tab
-  # Enable once the job does real work. Cron is in UTC; an off-the-hour minute avoids
-  # GitHub's busiest slot, when scheduled runs are often delayed or dropped.
-  # schedule:
-  #   - cron: "23 3 * * *" # 03:23 UTC every night
+  # The "Run workflow" button (Actions tab > Nightly train).
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run: train and evaluate, save and activate nothing"
+        type: boolean
+        default: false
+      no_activate:
+        description: "Save the new models but never activate them"
+        type: boolean
+        default: false
+  # Cron is in UTC; an off-the-hour minute avoids GitHub's busiest slot, when scheduled runs
+  # are often delayed or dropped. Schedules run only on the default branch (main).
+  schedule:
+    - cron: "23 3 * * *" # 03:23 UTC every night (04:23 / 05:23 in Spain)
 
 permissions:
   contents: read # the job only needs to read the code
@@ -13,6 +33,15 @@ permissions:
 concurrency:
   group: train # never run two at once; a new run waits for the old one
   cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: "1" # log lines appear as they happen
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+  # Manual-run options (empty on scheduled runs), passed through env, never pasted into the
+  # shell script, so input text can't run as a command.
+  DRY_RUN: ${{ inputs.dry_run }}
+  NO_ACTIVATE: ${{ inputs.no_activate }}
 
 jobs:
   train:
@@ -23,10 +52,36 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
-      # Dependencies are installed once the job needs them:
-      # - run: pip install -r jobs/requirements.txt
-      - run: python -m jobs.train
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          WINDY_API_KEY: ${{ secrets.WINDY_API_KEY }}
+          cache: pip
+          cache-dependency-path: jobs/requirements.txt
+
+      - name: Check secrets and options
+        run: |
+          for name in SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error title=Missing secret::$name is not set (Settings > Secrets and variables > Actions)"
+              exit 1
+            fi
+            echo "$name is set"
+          done
+          TRAIN_FLAGS=""
+          [ "$DRY_RUN" = "true" ] && TRAIN_FLAGS="$TRAIN_FLAGS --dry-run"
+          [ "$NO_ACTIVATE" = "true" ] && TRAIN_FLAGS="$TRAIN_FLAGS --no-activate"
+          PREDICT_FLAGS=""
+          [ "$DRY_RUN" = "true" ] && PREDICT_FLAGS="--dry-run"
+          echo "TRAIN_FLAGS=$TRAIN_FLAGS" >> "$GITHUB_ENV"
+          echo "PREDICT_FLAGS=$PREDICT_FLAGS" >> "$GITHUB_ENV"
+          echo "Train flags:${TRAIN_FLAGS:- (none)}"
+
+      - run: pip install -r jobs/requirements.txt
+
+      - name: Train per spot + general model (activate only if better)
+        timeout-minutes: 20
+        run: python -m jobs.train --test-days 14 $TRAIN_FLAGS
+
+      # Right away, so a newly activated model shows without waiting for the next hourly run.
+      # Runs even if training failed (then it uses whatever model is active).
+      - name: Predictions for the next 3 days
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: python -m jobs.predict --hours 72 $PREDICT_FLAGS

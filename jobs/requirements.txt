@@ -1,5 +1,10 @@
-# Python 3.11+. Install with: pip install -r jobs/requirements.txt
-supabase>=2.0          # database + storage client
-scikit-learn>=1.5      # baseline models
-xgboost>=2.1           # per-spot correction model
-ultralytics>=8.3       # YOLO crowd counting on cam snapshots (CPU)
+# Training (jobs/train.py). Install with: pip install -r jobs/requirements.txt
+# Pinned: a saved model file (joblib pickle) only loads reliably with the same scikit-learn,
+# so the versions here must match the machine that trains (GitHub Actions) and any that loads
+# models. These are the versions on the dev machine (Python 3.10) and they install on 3.11.
+# The collectors (collect*.py, explore.py, import_past.py) need only the standard library.
+scikit-learn==1.4.2
+numpy==1.23.5
+scipy==1.13.0
+joblib==1.4.0
+# Later: ultralytics (YOLO crowd counting) — install the CPU build of torch in Actions.
