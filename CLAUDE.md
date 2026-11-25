@@ -1000,9 +1000,15 @@ Money
   - Tried, NOT kept (my decision pending): a looser size scale (breaking 0.25/0.38/0.55/
     0.85/1.35 m for 1-5 instead of 0.30/0.45/0.70/1.05/1.60): missed GO vs T-old 17-26%,
     false GO 1-3%, but GO in rain 19-32%. Whether 0.5 m at 5 s is a GO is what ratings decide.
-- [x] Steps 32-38 committed 2026-11-25 on `test-preview` (c931a9a, secret scan clean), **not
-  pushed, not on `main`**. Migrations 15-19 are already applied, so pushing to `main` is safe for
-  the jobs; bump `web/package.json` to 0.5.0 in the release commit.
+- [x] Steps 32-39 committed 2026-11-25 on `test-preview` (c931a9a, f59d8e4; secret scans clean).
+- [x] **Released 2026-11-25 as app 0.5.0** (c351290, strict size scale kept, my decision):
+  `main` fast-forwarded to `test-preview` and pushed (github.com was unreachable for ~10 min,
+  pushes succeeded on retry). Migrations 15-19 were applied before the push, so the hourly
+  (forecast partitions + weather, measured weather for ratings, physics predictions) and nightly
+  (Waves/Shape models) jobs run the new code from their next run. Commits since `main` and
+  `web/dist` scanned: no keys. Live confirmed: isitworthsurf.vercel.app serves the 0.5.0 bundle
+  (contains physics-v1). Not yet checked on a real phone; first scheduled runs on the new code
+  not yet seen.
 - [ ] Barcelona city beach cams (found 2026-11-22): `https://www.barcelona.cat/sites/default/files/clabsa/camaraN.jpg`,
   N = 1-6, shown on barcelona.cat "Banys i platges": 1 + 2 Somorrostro (1 looks SW over
   Barceloneta), 3 + 4 Port Olímpic, 5 Nova Icària, 6 Bogatell. 1624x1234 or 2452x2056, people on
