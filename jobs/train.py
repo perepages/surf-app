@@ -297,7 +297,7 @@ def waves_from_size(size: str) -> float:
 def waves_from_buoy(o: Row, spot: Row) -> float:
     row = {"valid_at": datetime(2000, 1, 1, tzinfo=UTC), "swell_wave_height": o["wave_height"],
            "swell_wave_period": o.get("wave_period"), "swell_wave_direction": o.get("wave_direction")}
-    return physics.waves_score(physics.features(row, spot))
+    return physics.waves_score(physics.features(row, spot, forecast=False))
 
 
 def shape_from_overall(overall: float, waves: float) -> float | None:

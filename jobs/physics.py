@@ -37,7 +37,14 @@ COMPASS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
            "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
 
 # ---- swell window ----
-WINDOW_TAPER_DEG = 15      # energy fades to 0 over the last 15 deg inside each window edge
+WINDOW_TAPER_DEG = 15      # energy fades over the last 15 deg inside each window edge ...
+WINDOW_LEAK = 0.25         # ... down to this share, also outside the window (unverified edges:
+                           # some swell bends round a port; behind the coast, > 90 deg, stays 0)
+# Open-Meteo's wave height is ~0.10 m below the buoy at the buoy's own position, at every size
+# (12-month backtest 2025-26, buoy 1731: +0.07..+0.11 m). Added to FORECAST heights only.
+FORECAST_HEIGHT_BIAS_M = 0.10
+BIAS_FULL_FROM_M = 0.3
+BLOCKED_BELOW = 0.3           # reason says "mostly blocked here" below this window factor       # ramps in from 0 at 0 m (the data covers forecasts >= 0.2 m)
 MIN_TRAIN_HEIGHT = 0.05    # m; below this a train is "absent" (GFS writes 0.0 for none)
 
 # ---- waves ----
@@ -138,9 +145,9 @@ def window_factor(direction: float | None, spot: Row) -> float:
     width = (hi - lo) % 360
     into = (direction - lo) % 360
     if into > width:
-        return 0.0  # outside the window: blocked by a cape, port or the coast itself
+        return cos_part * WINDOW_LEAK  # outside the window: mostly blocked by a cape or port
     edge = min(into, width - into)
-    return cos_part * min(1.0, edge / WINDOW_TAPER_DEG)
+    return cos_part * max(WINDOW_LEAK, min(1.0, edge / WINDOW_TAPER_DEG))
 
 
 def komar_breaking_height(h0: float, period: float) -> float:
@@ -265,8 +272,9 @@ def max_rain_24h(series: dict[datetime, Row], t: datetime, back: int = 72) -> fl
 # ---------- features ----------
 
 def features(row: Row, spot: Row, series: dict[datetime, Row] | None = None,
-             daylight: bool | None = None) -> Row:
-    """Every raw input + derived value, flat, for the score and the AI (None = unknown)."""
+             daylight: bool | None = None, forecast: bool = True) -> Row:
+    """Every raw input + derived value, flat, for the score and the AI (None = unknown).
+    forecast=False for measured numbers (buoy): no FORECAST_HEIGHT_BIAS_M added."""
     normal = spot_geometry(spot)[0]
     t = row["valid_at"] if isinstance(row["valid_at"], datetime) else parse_time(row["valid_at"])
     series = series or {}
@@ -286,6 +294,9 @@ def features(row: Row, spot: Row, series: dict[datetime, Row] | None = None,
     f["main_power_kw"] = 0.49 * f["main_energy"]
     f["main_wavelength_m"] = 1.56 * f["main_period"] ** 2
     h0 = m["family_height"]
+    if forecast and h0 > 0:
+        # the bias is in metres of total height; scale it by how much of it reaches the beach
+        h0 += FORECAST_HEIGHT_BIAS_M * math.sqrt(main["factor"]) * min(1.0, h0 / BIAS_FULL_FROM_M)
     f["breaking_height"] = komar_breaking_height(h0, f["main_period"])
     f["other_energy"] = m["other_energy"]
     f["cleanliness"] = m["cleanliness"]
@@ -494,6 +505,8 @@ def reason(f: Row, row: Row, spot: Row, flags: list[Row], comfort: list[tuple[st
         return "Flat"
     hb, period = f["breaking_height"], f["main_period"]
     size = f"{fmt(hb, 1)} m at {fmt(period)} s from the {compass(f['main_direction'] or 0)}"
+    if f["main_window_factor"] < BLOCKED_BELOW:
+        size += " (mostly blocked here)"
     if overall_score(waves, shape) < 1.5:
         text = f"Too small: {size}"
     else:
@@ -518,9 +531,9 @@ def reason(f: Row, row: Row, spot: Row, flags: list[Row], comfort: list[tuple[st
 # ---------- entry points ----------
 
 def evaluate(row: Row, spot: Row, series: dict[datetime, Row] | None = None,
-             daylight: bool | None = None, prefs: Row | None = None) -> Row:
+             daylight: bool | None = None, prefs: Row | None = None, forecast: bool = True) -> Row:
     prefs = prefs or {}
-    f = features(row, spot, series, daylight)
+    f = features(row, spot, series, daylight, forecast)
     waves, shape = waves_score(f), shape_score(f)
     overall = overall_score(waves, shape)
     mind_rain = bool(prefs.get("dont_mind_rain"))  # "I don't mind rain"

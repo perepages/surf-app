@@ -157,7 +157,7 @@ def score_rows(rows: list[Row]) -> None:
         r["new"], r["new_overall"], r["new_nomix"] = new, new["overall"], nomix["overall"]
         r["new_verdict"] = new["verdict"]
         if ob["swell_wave_height"] is not None and ob["wind_speed"] is not None:
-            m = physics.evaluate(ob, spot, obs_series, r["daylight"])
+            m = physics.evaluate(ob, spot, obs_series, r["daylight"], forecast=False)
             r["obs_new"], r["obs_new_overall"] = m, m["overall"]
 
 

@@ -75,6 +75,11 @@ const COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', '
 
 // ---- swell window ----
 const WINDOW_TAPER_DEG = 15
+const WINDOW_LEAK = 0.25
+/** Open-Meteo's wave height is ~0.10 m below the buoy (12-month backtest); forecasts only. */
+const FORECAST_HEIGHT_BIAS_M = 0.1
+const BIAS_FULL_FROM_M = 0.3
+const BLOCKED_BELOW = 0.3
 const MIN_TRAIN_HEIGHT = 0.05
 // ---- waves ----
 export const WAVES_STEPS: [number, number][] = [[0.3, 1], [0.45, 2], [0.7, 3], [1.05, 4], [1.6, 5]]
@@ -175,9 +180,9 @@ export function windowFactor(direction: number | null, spot: PhysicsSpot): numbe
   const cosPart = Math.max(0, Math.cos((diff(direction, n) * Math.PI) / 180))
   const width = mod360(hi - lo)
   const into = mod360(direction - lo)
-  if (into > width) return 0
+  if (into > width) return cosPart * WINDOW_LEAK
   const edge = Math.min(into, width - into)
-  return cosPart * Math.min(1, edge / WINDOW_TAPER_DEG)
+  return cosPart * Math.max(WINDOW_LEAK, Math.min(1, edge / WINDOW_TAPER_DEG))
 }
 
 export function komarBreakingHeight(h0: number, period: number): number {
@@ -295,6 +300,7 @@ function maxRain24h(series: Series, t: number, back = 72): number | null {
 // ---------- features ----------
 
 export function features(h: HourConditions, spot: PhysicsSpot, series: Series = new Map(), daylight: boolean | null = null): Features {
+  // (Always a forecast in the app: FORECAST_HEIGHT_BIAS_M is added.)
   const normal = geometry(spot)[0]
   const m = mix(trains(h, spot))
   const main = m.main
@@ -308,7 +314,12 @@ export function features(h: HourConditions, spot: PhysicsSpot, series: Series = 
     mainDirection: main ? main.direction : null,
     mainAngle: main && main.direction != null ? diff(main.direction, normal) : null,
     mainWindowFactor: main ? main.factor : 0,
-    breakingHeight: komarBreakingHeight(m.familyHeight, main ? main.period : 0),
+    breakingHeight: komarBreakingHeight(
+      main && m.familyHeight > 0
+        ? m.familyHeight + FORECAST_HEIGHT_BIAS_M * Math.sqrt(main.factor) * Math.min(1, m.familyHeight / BIAS_FULL_FROM_M)
+        : m.familyHeight,
+      main ? main.period : 0,
+    ),
     cleanliness: m.cleanliness,
     conflictPenalty: m.conflictPenalty,
     windSpeed: ws,
@@ -457,7 +468,8 @@ function reason(f: Features, h: HourConditions, spot: PhysicsSpot, flags: Warnin
     }
     return 'Flat'
   }
-  const size = `${fmt(f.breakingHeight, 1)} m at ${fmt(f.mainPeriod, 0)} s from the ${compass(f.mainDirection ?? 0)}`
+  let size = `${fmt(f.breakingHeight, 1)} m at ${fmt(f.mainPeriod, 0)} s from the ${compass(f.mainDirection ?? 0)}`
+  if (f.mainWindowFactor < BLOCKED_BELOW) size += ' (mostly blocked here)'
   let text: string
   if (overallScore(waves, shape) < 1.5) text = `Too small: ${size}`
   else {

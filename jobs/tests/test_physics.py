@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import math
 import unittest
 from datetime import datetime, timedelta, timezone
 
@@ -29,15 +30,17 @@ def ev(**kw):
 class Geometry(unittest.TestCase):
     def test_window_factor(self):
         self.assertAlmostEqual(p.window_factor(165, SPOT), 1.0)
-        self.assertEqual(p.window_factor(90, SPOT), 0.0)          # blocked by the port
-        self.assertEqual(p.window_factor(250, SPOT), 0.0)         # outside
+        # outside the window: only WINDOW_LEAK of the energy gets round the port / cape
+        self.assertAlmostEqual(p.window_factor(90, SPOT), p.WINDOW_LEAK * math.cos(math.radians(75)))
+        self.assertAlmostEqual(p.window_factor(250, SPOT), p.WINDOW_LEAK * math.cos(math.radians(85)))
+        self.assertEqual(p.window_factor(345, SPOT), 0.0)         # behind the coast: nothing
         self.assertLess(p.window_factor(110, SPOT), 0.4)          # 5 deg inside the edge: tapered
         self.assertGreater(p.window_factor(130, SPOT), 0.5)
 
     def test_window_crossing_north(self):
         spot = {"beach_orientation": 0, "swell_window_min": 300, "swell_window_max": 60}
         self.assertAlmostEqual(p.window_factor(0, spot), 1.0)
-        self.assertEqual(p.window_factor(180, spot), 0.0)
+        self.assertAlmostEqual(p.window_factor(180, spot), 0.0)
 
     def test_no_window_stored(self):
         spot = {"beach_orientation": 165}
@@ -73,9 +76,18 @@ class Scores(unittest.TestCase):
         self.assertEqual(r["overall"], 1.0)
 
     def test_swell_outside_window(self):
-        r = ev(swell_wave_height=1.5, swell_wave_direction=80)
+        r = ev(swell_wave_height=1.5, swell_wave_direction=80)    # behind Vilanova port
+        self.assertLess(r["waves"], 2.0)                            # only a leak gets through
+        self.assertIn("from the E (mostly blocked here)", r["reason"])
+        r = ev(swell_wave_height=1.5, swell_wave_direction=20)    # from land: nothing
         self.assertEqual(r["waves"], 1.0)
         self.assertIn("can't reach", r["reason"])
+
+    def test_forecast_height_bias(self):
+        fc = p.evaluate(row(), SPOT, daylight=True)["features"]["breaking_height"]
+        measured = p.evaluate(row(), SPOT, daylight=True, forecast=False)["features"]["breaking_height"]
+        self.assertGreater(fc, measured)                           # +0.10 m on forecasts only
+        self.assertEqual(ev(swell_wave_height=0.1)["waves"], 1.0)  # near-flat stays flat
 
     def test_crossed_swell_hurts_shape_and_explains(self):
         r = ev(secondary_swell_wave_height=0.6, secondary_swell_wave_period=6,

@@ -983,6 +983,23 @@ Money
     not ratings (the live models train on ratings: 3 so far).
   - Not done (ideas): calibrate `WAVES_STEPS` for Open-Meteo's low bias (the AI does it per spot
     once trained); check window edges with ratings/cam.
+- [x] Step 39 (2026-11-25): two adjustments after the backtest (asked for by me).
+  - Swell window edges softened: `WINDOW_LEAK = 0.25` (outside the window and at the edges
+    25% of the energy gets through; > 90° from the normal = behind the coast stays 0). Reason
+    adds "(mostly blocked here)" when the main swell's window factor < 0.3.
+  - Forecast size bias: Open-Meteo is 0.07-0.11 m below buoy 1731 at the buoy's own position
+    at every size (median +0.10 m), so `FORECAST_HEIGHT_BIAS_M = 0.10` is added to forecast
+    heights (scaled by sqrt(window factor), ramping in from 0 at 0 m to full at 0.3 m so
+    near-flat stays flat). Measured numbers (`forecast=False`: buoy targets in train.py,
+    T-new in the backtest) get no bias. The beach-vs-buoy gap of another ~0.10 m is real
+    shelter and is left alone. py + ts, parity 2000/2000, tests 27.
+  - Backtest after (vs before): error against T-new 0.53-0.60 (was 0.57-0.63), now below the
+    old engine at every spot (0.56-0.65 on the same truth); missed GO vs T-old 21-30% (was
+    23-32%; old engine 16-22%); said GO wrongly still ~1%; GO in measured rain 12-21% (was
+    6-20%; old 47-76%). New AI vs T-new 0.44-0.56 (old AI 0.59-0.76).
+  - Tried, NOT kept (my decision pending): a looser size scale (breaking 0.25/0.38/0.55/
+    0.85/1.35 m for 1-5 instead of 0.30/0.45/0.70/1.05/1.60): missed GO vs T-old 17-26%,
+    false GO 1-3%, but GO in rain 19-32%. Whether 0.5 m at 5 s is a GO is what ratings decide.
 - [x] Steps 32-38 committed 2026-11-25 on `test-preview` (c931a9a, secret scan clean), **not
   pushed, not on `main`**. Migrations 15-19 are already applied, so pushing to `main` is safe for
   the jobs; bump `web/package.json` to 0.5.0 in the release commit.
