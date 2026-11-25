@@ -12,8 +12,10 @@ It asks for:
   4. Puertos del Estado buoys: lists the wave buoys within --buoy-km (default 150 km)
      with distance, depth, whether they also measure wind, and how old their newest
      reading is (asked live from PORTUS);
-  5. the beach orientation: the direction you face standing on the sand looking at the
-     sea, in degrees (0 = N, 90 = E, 180 = S) or as a compass point (SSE);
+  5. the beach orientation (= beach normal): the direction you face standing on the sand
+     looking at the sea, in degrees (0 = N, 90 = E, 180 = S) or as a compass point (SSE),
+     and the swell window (directions swell can arrive from); both suggested from the
+     OpenStreetMap coastline (jobs/coastline.py);
   6. the time zone (suggested by Open-Meteo for those coordinates).
 Then it shows the row and inserts it into `spots` after you say yes.
 
@@ -42,6 +44,7 @@ if __package__ in (None, ""):  # run as `python jobs/add_spot.py`: make `jobs` i
 from jobs.check_connections import ROOT, env, load_dotenv  # noqa: E402
 from jobs.collect_buoy import PORTUS_API, WANTED  # noqa: E402
 from jobs.collect_cam import WINDY_URL  # noqa: E402
+from jobs import coastline  # noqa: E402
 from jobs.collect_forecast import MARINE_URL, WEATHER_URL, Supabase, http  # noqa: E402
 
 COMPASS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
@@ -168,6 +171,19 @@ def parse_orientation(text: str) -> int:
     if not 0 <= value < 360:
         raise ValueError("degrees must be 0-359")
     return int(round(value)) % 360
+
+
+def parse_window(text: str) -> tuple[int, int] | None:
+    """'105-240' -> (105, 240); 'none' -> None. Clockwise from the first to the second."""
+    if text.strip().lower() in ("none", "-", "unknown"):
+        return None
+    parts = [p for p in re.split(r"[\s,;/-]+", text.strip()) if p]
+    if len(parts) != 2:
+        raise ValueError("give two directions like 105-240 (clockwise), or 'none'")
+    lo, hi = parse_orientation(parts[0]), parse_orientation(parts[1])
+    if lo == hi:
+        raise ValueError("the two directions must differ")
+    return lo, hi
 
 
 def parse_timezone(text: str) -> str:
@@ -463,8 +479,31 @@ def main() -> int:
               "you face?")
         print("   Degrees (0 = N, 90 = E, 180 = S, 270 = W) or a compass point (S, SSE, SE...).")
         print("   Wind from that side is onshore, from the opposite side offshore.")
-        orientation = ask_until("Orientation", parse_orientation)
+        print("   Reading the OpenStreetMap coastline around the point (10-60 s)...")
+        ways: list = []
+        try:
+            ways = coastline.fetch_ways(lat, lon)
+            coast = coastline.analyse(lat, lon, ways)
+            print("   Suggested: " + coastline.describe(coast))
+        except Exception as exc:
+            coast = None
+            print(f"  ! Coastline check failed ({type(exc).__name__}: {exc}).")
+        guess = coast and coast["coast_normal"]
+        orientation = ask_until("Orientation", parse_orientation,
+                                None if guess is None else str(guess))
         print(f"  = {orientation}° ({compass(orientation)})")
+        if coast is not None and orientation != coast["normal"]:
+            try:
+                coast = coastline.analyse(lat, lon, ways, orientation)
+                print("   With that normal: " + coastline.describe(coast))
+            except Exception:
+                coast = None
+        print("   Swell window: directions swell can come FROM and still reach the beach")
+        print("   (capes, ports and breakwaters block the rest). Clockwise, e.g. 105-240.")
+        win_default = (f"{coast['window_min']}-{coast['window_max']}"
+                       if coast and coast["window_min"] is not None
+                       else f"{(orientation - 90) % 360}-{(orientation + 90) % 360}")
+        window = ask_until("Swell window", parse_window, win_default)
 
         # 6. time zone
         print("\n6. Time zone (used for 'today' and the rating time limits)")
@@ -472,7 +511,10 @@ def main() -> int:
 
         row = {
             "id": spot_id, "name": name, "lat": lat, "lon": lon,
-            "beach_orientation": orientation, "windy_cam_id": cam_id,
+            "beach_orientation": orientation,
+            "swell_window_min": window[0] if window else None,
+            "swell_window_max": window[1] if window else None,
+            "windy_cam_id": cam_id,
             "buoy_ids": buoy_ids, "timezone": timezone_name, "active": True,
         }
         print("\nNew spot:")
@@ -493,6 +535,8 @@ def main() -> int:
              method="POST", body=[row])
     except Exception as exc:
         print(f"Insert failed: {type(exc).__name__}: {exc}")
+        if "swell_window" in str(exc):
+            print("  Apply migration 20261125000015_swell_window.sql in the SQL editor first.")
         return 1
     print(f"\nInserted '{spot_id}'. Next:")
     print("  - check it now:  python -m jobs.collect_forecast --dry-run   (and collect_buoy /"

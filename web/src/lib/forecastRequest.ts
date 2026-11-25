@@ -27,9 +27,27 @@ export const WAVE_VARS = [
   'swell_wave_height',
   'swell_wave_period',
   'swell_wave_direction',
+  // Every wave train, for the physics score's cleanliness / crossed-swell checks.
+  'secondary_swell_wave_height',
+  'secondary_swell_wave_period',
+  'secondary_swell_wave_direction',
+  'wind_wave_height',
+  'wind_wave_period',
+  'wind_wave_direction',
 ] as const
-const TIDE_VARS = ['sea_level_height_msl'] as const
-const WIND_VARS = ['wind_speed_10m', 'wind_direction_10m', 'wind_gusts_10m', 'is_day'] as const
+const TIDE_VARS = ['sea_level_height_msl', 'sea_surface_temperature'] as const
+const WIND_VARS = [
+  'wind_speed_10m',
+  'wind_direction_10m',
+  'wind_gusts_10m',
+  'is_day',
+  // Comfort + safety (physics score): rain, thunderstorms, cold.
+  'precipitation',
+  'precipitation_probability',
+  'weather_code',
+  'cape',
+  'temperature_2m',
+] as const
 
 type Coords = { lat: number | string; lon: number | string }
 

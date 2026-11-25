@@ -8,16 +8,17 @@ import { MARINE_URL, WEATHER_URL, FALLBACK_MARINE_MODEL } from './forecastReques
 import { OPEN_METEO_TIMEOUT_MS, withTimeout } from './http'
 import { readLastGood, writeLastGood } from './lastGood'
 import type { HourConditions } from './openMeteo'
+import type { AiPrediction } from './predictions'
 import type { Crowd } from './ratings'
-import { FALLBACK_SPOTS, type Spot } from './spot'
+import { FALLBACK_SPOTS, SPOT_COLUMNS, spotFromRow, type Spot, type SpotRow } from './spot'
 import { rpc, selectRows, supabaseConfigured } from './supabase'
 
 export interface SpotNow {
   spot: Spot
   /** Conditions for the current hour, null if Open-Meteo had nothing for this spot. */
   hour: HourConditions | null
-  /** AI score for the current hour, when a model exists for this spot. */
-  aiScore: number | null
+  /** The model's Waves / Shape for the current hour, when a model exists for this spot. */
+  ai: AiPrediction | null
   /** Most common crowd in today's surfer reports (null = no reports, or none said). */
   crowd: Crowd | null
   reports: number
@@ -25,10 +26,10 @@ export interface SpotNow {
 
 export interface SpotListData {
   spots: Spot[]
-  /** spot id -> a few hours around now (unix s -> conditions). */
+  /** spot id -> the last 72 h (wind/rain history) and the next 4 (unix s -> conditions). */
   hours: Record<string, HourConditions[]>
-  /** spot id -> (valid_at unix s -> AI score). */
-  ai: Record<string, Record<number, number>>
+  /** spot id -> (valid_at unix s -> AI prediction). */
+  ai: Record<string, Record<number, AiPrediction>>
   crowd: Record<string, { crowd: Crowd | null; count: number }>
   /** Unix ms of the Open-Meteo fetch. */
   fetchedAt: number
@@ -41,24 +42,16 @@ export type SpotListState =
   | { status: 'error'; message: string }
   | { status: 'ready'; data: SpotListData; stale: boolean; refreshing: boolean }
 
-const SAVED_KEY = 'spot-list:v1'
+const SAVED_KEY = 'spot-list:v2'
 const REFRESH_AFTER_MS = 30 * 60 * 1000
 const CHECK_EVERY_MS = 5 * 60 * 1000
 const todayKey = () => new Date().toDateString()
 
 // ---------- spots ----------
 
-interface SpotRow {
-  id: string
-  name: string
-  lat: number
-  lon: number
-  beach_orientation: number
-}
-
 async function loadActiveSpots(signal: AbortSignal): Promise<Spot[]> {
-  const rows = await selectRows<SpotRow>('spots', 'select=id,name,lat,lon,beach_orientation&active=eq.true&order=id', signal)
-  const spots = rows.map((r) => ({ id: r.id, name: r.name, lat: r.lat, lon: r.lon, beachOrientation: r.beach_orientation }))
+  const rows = await selectRows<SpotRow>('spots', `select=${SPOT_COLUMNS}&active=eq.true&order=id`, signal)
+  const spots = rows.map(spotFromRow)
   // Each spot's own key too, so opening it starts with the right coordinates at once.
   for (const s of spots) writeLastGood(`spot:${s.id}`, s)
   return spots
@@ -66,9 +59,18 @@ async function loadActiveSpots(signal: AbortSignal): Promise<Spot[]> {
 
 // ---------- Open-Meteo, all spots in one request ----------
 
-const MARINE_VARS = ['wave_height', 'wave_period', 'wave_direction', 'swell_wave_height', 'swell_wave_period', 'swell_wave_direction', 'sea_level_height_msl']
-const WAVE_ONLY = MARINE_VARS.slice(0, 6)
-const WIND_VARS = ['wind_speed_10m', 'wind_direction_10m', 'wind_gusts_10m', 'is_day']
+const WAVE_ONLY = [
+  'wave_height', 'wave_period', 'wave_direction', 'swell_wave_height', 'swell_wave_period', 'swell_wave_direction',
+  'secondary_swell_wave_height', 'secondary_swell_wave_period', 'secondary_swell_wave_direction',
+  'wind_wave_height', 'wind_wave_period', 'wind_wave_direction',
+]
+const MARINE_VARS = [...WAVE_ONLY, 'sea_level_height_msl', 'sea_surface_temperature']
+const WIND_VARS = [
+  'wind_speed_10m', 'wind_direction_10m', 'wind_gusts_10m', 'is_day',
+  'precipitation', 'precipitation_probability', 'weather_code', 'cape', 'temperature_2m',
+]
+/** History for the physics score: wind over 6/12/24 h, rain over 72 h. */
+const PAST_HOURS = 72
 
 type Hourly = Record<string, (number | null)[]> & { time: number[] }
 interface Located {
@@ -80,7 +82,7 @@ async function getMany(url: string, spots: Spot[], params: Record<string, string
     latitude: spots.map((s) => s.lat).join(','),
     longitude: spots.map((s) => s.lon).join(','),
     timeformat: 'unixtime',
-    past_hours: '1',
+    past_hours: String(PAST_HOURS),
     forecast_hours: '4',
     ...params,
   })
@@ -140,6 +142,18 @@ async function loadHours(spots: Spot[], signal: AbortSignal): Promise<Record<str
         windDirection: v(w, 'wind_direction_10m', k),
         windGusts: v(w, 'wind_gusts_10m', k),
         isDay: k === undefined ? true : v(w, 'is_day', k) === 1,
+        secondarySwellHeight: v(m, 'secondary_swell_wave_height', j),
+        secondarySwellPeriod: v(m, 'secondary_swell_wave_period', j),
+        secondarySwellDirection: v(m, 'secondary_swell_wave_direction', j),
+        windWaveHeight: v(m, 'wind_wave_height', j),
+        windWavePeriod: v(m, 'wind_wave_period', j),
+        windWaveDirection: v(m, 'wind_wave_direction', j),
+        seaTemp: v(m, 'sea_surface_temperature', j),
+        precipitation: v(w, 'precipitation', k),
+        precipProb: v(w, 'precipitation_probability', k),
+        weatherCode: v(w, 'weather_code', k),
+        cape: v(w, 'cape', k),
+        airTemp: v(w, 'temperature_2m', k),
       }
     })
   })
@@ -148,24 +162,40 @@ async function loadHours(spots: Spot[], signal: AbortSignal): Promise<Record<str
 
 // ---------- Supabase: AI scores + crowd ----------
 
-async function loadAi(spots: Spot[], signal: AbortSignal): Promise<Record<string, Record<number, number>> | null> {
+async function loadAi(spots: Spot[], signal: AbortSignal): Promise<SpotListData['ai'] | null> {
   if (!supabaseConfigured || !spots.length) return {}
   const now = Date.now() / 1000
   const iso = (u: number) => encodeURIComponent(new Date(u * 1000).toISOString())
   try {
-    const rows = await selectRows<{ spot_id: string; valid_at: string; ai_score: number }>(
+    const rows = await selectRows<{
+      spot_id: string
+      valid_at: string
+      ai_score: number
+      ai_waves: number | null
+      ai_shape: number | null
+    }>(
       'predictions',
       [
-        'select=spot_id,valid_at,ai_score',
+        'select=spot_id,valid_at,ai_score,ai_waves,ai_shape',
         `spot_id=in.(${spots.map((s) => encodeURIComponent(s.id)).join(',')})`,
         `valid_at=gte.${iso(now - 2 * 3600)}`,
         `valid_at=lte.${iso(now + 5 * 3600)}`,
-        'ai_score=not.is.null',
+        'ai_waves=not.is.null',
       ].join('&'),
       signal,
     )
-    const out: Record<string, Record<number, number>> = {}
-    for (const r of rows) (out[r.spot_id] ??= {})[Math.round(Date.parse(r.valid_at) / 1000)] = r.ai_score
+    const out: SpotListData['ai'] = {}
+    for (const r of rows) {
+      const validAt = Math.round(Date.parse(r.valid_at) / 1000)
+      ;(out[r.spot_id] ??= {})[validAt] = {
+        validAt,
+        aiScore: r.ai_score,
+        aiWaves: r.ai_waves,
+        aiShape: r.ai_shape,
+        reason: null,
+        modelVersion: null,
+      }
+    }
     return out
   } catch (err) {
     if (signal.aborted) throw err
@@ -203,7 +233,7 @@ export function spotsNow(data: SpotListData, nowS: number): SpotNow[] {
     return {
       spot,
       hour,
-      aiScore: hour ? (data.ai[spot.id]?.[hour.time] ?? null) : null,
+      ai: hour ? (data.ai[spot.id]?.[hour.time] ?? null) : null,
       crowd: c?.crowd ?? null,
       reports: c?.count ?? 0,
     }

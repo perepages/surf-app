@@ -7,8 +7,11 @@ export interface SpotConfig {
   name: string
   lat: number
   lon: number
-  /** Degrees the beach faces (0 = N, 90 = E). */
+  /** Beach normal: degrees the beach faces, towards the sea (0 = N, 90 = E). */
   beachOrientation: number
+  /** Swell window, clockwise from min to max (degrees swell comes from); null = normal ± 90. */
+  swellWindowMin?: number | null
+  swellWindowMax?: number | null
 }
 
 export const FALLBACK_SPOTS: Record<string, SpotConfig> = {
@@ -18,6 +21,8 @@ export const FALLBACK_SPOTS: Record<string, SpotConfig> = {
     lat: 41.2097,
     lon: 1.7128,
     beachOrientation: 165,
+    swellWindowMin: 105,
+    swellWindowMax: 240,
   },
 }
 

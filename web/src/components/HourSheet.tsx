@@ -130,6 +130,7 @@ function Sheet({ onClose, days, initialDay, scores, spot, timezone, now }: Props
                 <th scope="col" className="py-1.5 font-normal">Waves</th>
                 <th scope="col" className="py-1.5 font-normal">Power</th>
                 <th scope="col" className="py-1.5 font-normal">Wind</th>
+                <th scope="col" className="py-1.5 pr-1 text-right font-normal">Sky</th>
               </tr>
             </thead>
             <tbody>
@@ -137,7 +138,11 @@ function Sheet({ onClose, days, initialDay, scores, spot, timezone, now }: Props
                 const isNow = now >= h.time && now < h.time + 3600
                 const power = wavePower(h)
                 const wind = windInfo(h, spot.beachOrientation)
-                const value = scores.get(h.time)?.value ?? 1
+                const score = scores.get(h.time)
+                const value = score?.value ?? 1
+                const warnings = score?.physics?.warnings.filter((w) => w.kind !== 'thunder') ?? []
+                const thunder = score?.physics?.warnings.some((w) => w.kind === 'thunder')
+                const rainy = (h.precipProb ?? 0) > 20 || (h.precipitation ?? 0) >= 0.1
                 return (
                   <tr
                     key={h.time}
@@ -168,6 +173,21 @@ function Sheet({ onClose, days, initialDay, scores, spot, timezone, now }: Props
                         </span>
                       )}
                     </td>
+                    <td className="pr-1 text-right text-[12px] whitespace-nowrap tabular-nums">
+                      {thunder ? (
+                        <span title="Thunderstorm risk" aria-label="thunderstorm risk">⛈</span>
+                      ) : rainy ? (
+                        <span title={`${h.precipProb ?? '?'}% chance of rain`} className="text-mist">
+                          <span aria-hidden>🌧</span>
+                          {h.precipProb != null ? `${h.precipProb}%` : ''}
+                        </span>
+                      ) : null}
+                      {warnings.length > 0 && (
+                        <span title={warnings.map((w) => w.text).join('. ')} aria-label={warnings.map((w) => w.text).join('. ')} className="ml-0.5 text-coral-text">
+                          ⚠
+                        </span>
+                      )}
+                    </td>
                   </tr>
                 )
               })}
@@ -175,7 +195,7 @@ function Sheet({ onClose, days, initialDay, scores, spot, timezone, now }: Props
           </table>
           <p className="px-1 pt-2 text-[11px] leading-snug text-mist">
             Power = wave strength in kW per metre (brighter = stronger). Wind: off = offshore (clean), cross = cross-shore, on =
-            onshore (messy).
+            onshore (messy). Sky: 🌧 chance of rain, ⛈ thunderstorm (score forced to 1), ⚠ safety warning (rip currents, too big for your level, polluted water).
             {day.sunset != null && ` Greyed hour is after sunset (${hhmm(day.sunset, timezone)}).`}
           </p>
         </div>

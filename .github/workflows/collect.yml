@@ -105,6 +105,11 @@ jobs:
         timeout-minutes: 10
         run: python -m jobs.collect --only cam $FLAGS
 
+      - name: Measured weather for ratings (Meteocat)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: python -m jobs.collect --only rating_weather $FLAGS
+
       # After all collectors: scores the app shows for the next 3 days from the NEWEST stored
       # forecast (simple score, plus the AI score + reason when a model is active;
       # jobs/predict.py). Still runs if a collector failed (then it uses the last forecast).

@@ -11,7 +11,8 @@
     "serve:dist": "node scripts/serve-dist.mjs",
     "measure": "node scripts/measure-pwa.mjs",
     "share-kit": "node scripts/share-kit.mjs",
-    "vapid-keys": "node scripts/vapid-keys.mjs"
+    "vapid-keys": "node scripts/vapid-keys.mjs",
+    "physics-parity": "node scripts/physics-parity.mjs"
   },
   "dependencies": {
     "framer-motion": "^14.14.0",

@@ -18,7 +18,7 @@ import {
 } from './forecastRequest'
 import { OPEN_METEO_TIMEOUT_MS, untilAbort, withTimeout } from './http'
 
-const CACHE_VERSION = 3 // bump when the cached shape or request changes
+const CACHE_VERSION = 4 // bump when the cached shape or request changes
 /** Spots whose full forecast stays saved on the phone (opens offline). */
 const MAX_SAVED_SPOTS = 6
 
@@ -36,6 +36,19 @@ export interface HourConditions {
   windGusts: number | null
   tide: number | null // m relative to mean sea level
   isDay: boolean
+  // Optional: copies saved by older versions don't have them (treated as unknown).
+  secondarySwellHeight?: number | null
+  secondarySwellPeriod?: number | null
+  secondarySwellDirection?: number | null
+  windWaveHeight?: number | null
+  windWavePeriod?: number | null
+  windWaveDirection?: number | null
+  seaTemp?: number | null // °C
+  precipitation?: number | null // mm in the preceding hour
+  precipProb?: number | null // %
+  weatherCode?: number | null // WMO; 95/96/99 = thunderstorm
+  cape?: number | null // J/kg
+  airTemp?: number | null // °C
 }
 
 export interface ForecastDay {
@@ -149,6 +162,18 @@ async function fetchFromApi(spot: Spot, signal?: AbortSignal): Promise<Forecast>
       windDirection: w === undefined ? null : value(weather.hourly, 'wind_direction_10m', w),
       windGusts: w === undefined ? null : value(weather.hourly, 'wind_gusts_10m', w),
       isDay: w === undefined ? true : value(weather.hourly, 'is_day', w) === 1,
+      secondarySwellHeight: value(m, 'secondary_swell_wave_height', i),
+      secondarySwellPeriod: value(m, 'secondary_swell_wave_period', i),
+      secondarySwellDirection: value(m, 'secondary_swell_wave_direction', i),
+      windWaveHeight: value(m, 'wind_wave_height', i),
+      windWavePeriod: value(m, 'wind_wave_period', i),
+      windWaveDirection: value(m, 'wind_wave_direction', i),
+      seaTemp: value(m, 'sea_surface_temperature', i),
+      precipitation: w === undefined ? null : value(weather.hourly, 'precipitation', w),
+      precipProb: w === undefined ? null : value(weather.hourly, 'precipitation_probability', w),
+      weatherCode: w === undefined ? null : value(weather.hourly, 'weather_code', w),
+      cape: w === undefined ? null : value(weather.hourly, 'cape', w),
+      airTemp: w === undefined ? null : value(weather.hourly, 'temperature_2m', w),
     }
   })
 

@@ -18,6 +18,9 @@ import { useFavourites } from './lib/favourites'
 import { linkClick, spotPath, useRoute } from './lib/route'
 import { useSpotList } from './lib/spotList'
 import { readLocalAlerts, syncAlerts } from './lib/push'
+import { usePrefs } from './lib/prefs'
+import { PrefsButton } from './components/PrefsButton'
+import { seriesOf } from './scoring/physics'
 
 const loadMotionFeatures = () => import('./motionFeatures').then((r) => r.default)
 
@@ -29,7 +32,6 @@ const RateSheet = lazy(() => import('./components/RateSheet').then((m) => ({ def
 const PrivacyPage = lazy(() => import('./components/PrivacyPage').then((m) => ({ default: m.PrivacyPage })))
 const HourSheet = lazy(() => import('./components/HourSheet').then((m) => ({ default: m.HourSheet })))
 const AlertSheet = lazy(() => import('./components/AlertSheet').then((m) => ({ default: m.AlertSheet })))
-
 /**
  * Renders children only once their placeholder comes within `margin` of the screen. Keeps the
  * first paint small (the top of the page) and moves the rest out of the start-up work.
@@ -196,12 +198,15 @@ interface ScreenProps {
 
 function SpotScreen({ spot, forecast, stale, refreshing, ai, now, online, reports, model, onRatingSent }: ReadyState & ScreenProps) {
   const tz = forecast.timezone
-  // Scores for every fetched hour, yesterday included (ratings need them).
+  const { prefs } = usePrefs()
+  // Scores for every fetched hour, yesterday included (ratings need them). The whole fetched
+  // range (past 14 days too) is the history for wind 6/12/24 h and rain 72 h.
   const scores = useMemo(() => {
+    const series = seriesOf(forecast.days.flatMap((d) => d.hours))
     const m = new Map<number, Score>()
-    for (const d of forecast.days) for (const h of d.hours) m.set(h.time, resolveScore(h, spot, ai.get(h.time)))
+    for (const d of forecast.days) for (const h of d.hours) m.set(h.time, resolveScore(h, spot, ai.get(h.time), series, prefs))
     return m
-  }, [forecast, spot, ai])
+  }, [forecast, spot, ai, prefs])
   // The forecast UI starts at today.
   const today = localDate(now, tz)
   const days = useMemo(() => {
@@ -269,7 +274,8 @@ function SpotScreen({ spot, forecast, stale, refreshing, ai, now, online, report
     <main className="flex flex-col gap-3.5">
       <div className="flex items-center justify-between px-3 pt-3 sm:px-6">
         <BackLink />
-        <div className="flex items-center gap-1">
+        <div className="flex flex-wrap items-center justify-end gap-1">
+          <PrefsButton />
           <button
             type="button"
             onClick={() => {

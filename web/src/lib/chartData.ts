@@ -1,8 +1,9 @@
 // Data for the "Forecast vs surfers" chart: one row per day for the last 14 days.
 //
-// - simple:  the simple score, averaged over daylight hours. For past days it is recomputed
-//            from Open-Meteo's numbers for that day (past_days), i.e. what the simple rules make
-//            of the conditions, not necessarily what the app showed days ahead.
+// - simple:  the physics score (overall of Waves and Shape, no comfort), averaged over daylight
+//            hours. For past days it is recomputed from Open-Meteo's numbers for that day
+//            (past_days), i.e. what the rules make of the conditions, not necessarily what the
+//            app showed days ahead.
 // - ai:      the AI score from the predictions table, averaged over daylight hours (null until
 //            a model has written scores for that day).
 // - surfers: the average community rating that day (null on days nobody rated).
@@ -12,7 +13,7 @@ import type { Forecast } from './openMeteo'
 import type { AiPrediction } from './predictions'
 import type { DailyRating } from './reports'
 import type { Spot } from './spot'
-import { simpleScore } from '../scoring/simpleScore'
+import { evaluate, seriesOf } from '../scoring/physics'
 
 export interface ChartRow {
   day: string
@@ -35,6 +36,7 @@ export function buildChartRows(
   days: number,
 ): ChartRow[] {
   const byDay = new Map(daily.map((d) => [d.day, d]))
+  const series = seriesOf(forecast.days.flatMap((d) => d.hours))
   return forecast.days
     .filter((d) => d.date <= today)
     .slice(-days)
@@ -45,7 +47,7 @@ export function buildChartRows(
       return {
         day: d.date,
         label: `${weekday(noon, forecast.timezone)} ${dayOfMonth(noon, forecast.timezone)}`,
-        simple: round1(mean(light.map((h) => simpleScore(h, spot).value))),
+        simple: round1(mean(light.map((h) => Math.round(evaluate(h, spot, series, true).overall)))),
         ai: round1(mean(light.flatMap((h) => (ai.has(h.time) ? [ai.get(h.time)!.aiScore] : [])))),
         surfers: rated ? round1(rated.avgOverall) : null,
         reports: rated?.reports ?? 0,

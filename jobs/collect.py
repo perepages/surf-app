@@ -15,12 +15,13 @@ import argparse
 import sys
 import traceback
 
-from jobs import collect_buoy, collect_cam, collect_forecast, log
+from jobs import collect_buoy, collect_cam, collect_forecast, log, rating_weather
 
 STEPS = {
     "forecast": collect_forecast,
     "buoy": collect_buoy,
     "cam": collect_cam,
+    "rating_weather": rating_weather,  # measured weather for recent ratings (Meteocat)
 }
 
 

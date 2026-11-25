@@ -10,7 +10,7 @@ import { learnedFrom, type ModelInfo } from '../lib/modelInfo'
 // (lightness band, chroma, colour-blind separation, contrast). Each series also has its own
 // line style, so identity never depends on colour alone.
 const SERIES = [
-  { key: 'simple', name: 'Simple score', color: '#4a8fe0', dash: '6 4', dot: false },
+  { key: 'simple', name: 'Physics rules', color: '#4a8fe0', dash: '6 4', dot: false },
   { key: 'ai', name: 'AI score', color: '#b88310', dash: undefined, dot: false },
   { key: 'surfers', name: 'Surfers', color: '#1ca88a', dash: undefined, dot: true },
 ] as const
@@ -37,7 +37,7 @@ export default function ForecastVsSurfers({ rows, model }: { rows: ChartRow[]; m
       {/* Headline: how far off each score was, on days people rated. */}
       {simpleMiss && (
         <p className="mt-3 max-w-[60ch]">
-          The simple score was off by <strong className="tabular-nums">{simpleMiss.miss.toFixed(1)}</strong> on average
+          The physics rules were off by <strong className="tabular-nums">{simpleMiss.miss.toFixed(1)}</strong> on average
           {aiMiss ? (
             <>
               , the AI score by <strong className="tabular-nums">{aiMiss.miss.toFixed(1)}</strong>
@@ -59,7 +59,7 @@ export default function ForecastVsSurfers({ rows, model }: { rows: ChartRow[]; m
         ))}
       </ul>
 
-      <div className="mt-2 h-56 w-full" role="img" aria-label="Line chart of daily simple score, AI score and surfer rating; the same numbers are in the table below.">
+      <div className="mt-2 h-56 w-full" role="img" aria-label="Line chart of daily physics-rules score, AI score and surfer rating; the same numbers are in the table below.">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: -24 }}>
             <CartesianGrid vertical={false} stroke="#1f5e70" strokeOpacity={0.8} />
@@ -104,7 +104,7 @@ export default function ForecastVsSurfers({ rows, model }: { rows: ChartRow[]; m
           <thead className="text-left text-mist">
             <tr>
               <th className="py-1 font-normal">Day</th>
-              <th className="py-1 text-right font-normal">Simple</th>
+              <th className="py-1 text-right font-normal">Rules</th>
               {hasAi && <th className="py-1 text-right font-normal">AI</th>}
               <th className="py-1 text-right font-normal">Surfers</th>
               <th className="py-1 text-right font-normal">Reports</th>
@@ -140,7 +140,7 @@ function AiVsForecast({ model }: { model: ModelInfo }) {
   const parts = [
     { n: aiCloser, label: 'AI closer', color: SERIES[1].color },
     { n: same, label: 'Same', color: '#3d6470' },
-    { n: simpleCloser, label: 'Forecast closer', color: SERIES[0].color },
+    { n: simpleCloser, label: 'Rules closer', color: SERIES[0].color },
   ].filter((p) => p.n > 0)
 
   return (
@@ -165,7 +165,7 @@ function AiVsForecast({ model }: { model: ModelInfo }) {
           <p>
             On <strong className="tabular-nums">{compared}</strong> rated {compared === 1 ? 'hour' : 'hours'} in the last{' '}
             {days} days, the AI was closer to what surfers said <strong className="tabular-nums">{times(aiCloser)}</strong>,
-            the raw forecast <strong className="tabular-nums">{times(simpleCloser)}</strong>
+            the rules alone <strong className="tabular-nums">{times(simpleCloser)}</strong>
             {same > 0 ? <> (equally close {times(same)})</> : null}.
           </p>
           {/* One bar, split by who was closer; a 2px gap between segments, labels below. */}

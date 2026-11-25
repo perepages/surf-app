@@ -52,7 +52,8 @@ from jobs.check_connections import ROOT, env, load_dotenv
 from jobs.collect_forecast import MARINE_URL, Supabase, http
 from jobs.explore import (COMPASS, STYLE, Panel, compass, esc, nice_ticks, round_hour, simple_score,
                           svg, ts, wind_relation)
-from jobs.train import features, fit, predict
+from jobs.train import OLD_FEATURES, fit, predict
+from jobs.train import old_features as features  # the simple-score engine (jobs/backtest_engines.py compares it with physics-v1)
 
 UTC = timezone.utc
 Row = dict[str, Any]
@@ -322,7 +323,7 @@ def run_model(rows: list[Row], cut: datetime) -> Row:
     data = model_rows(rows)
     train = [d for d in data if d["row"]["time"] < cut]
     test = [d for d in data if d["row"]["time"] >= cut]
-    model = fit(train, "overall")
+    model = fit(train, "overall", OLD_FEATURES)
     preds = predict(model, test)
     for d, p in zip(test, preds):
         d["row"]["ai_score"] = round_half_up(float(p))
@@ -741,12 +742,17 @@ def configure(spot_id: str, station: str | None, offline: bool) -> None:
     def spot_row() -> Row:
         load_dotenv(ROOT / ".env")
         db = Supabase(env("SUPABASE_URL"), env("SUPABASE_SERVICE_ROLE_KEY"))
-        rows = http(f"{db.base}/spots?select=id,name,lat,lon,beach_orientation,buoy_ids,windy_cam_id"
+        rows = http(f"{db.base}/spots?select=id,name,lat,lon,beach_orientation,swell_window_min,swell_window_max,"
+                    "buoy_ids,windy_cam_id,wind_station,weather_station"
                     f"&id=eq.{urllib.parse.quote(spot_id)}", db.headers) or []
         if not rows:
             raise SystemExit(f"no spot '{spot_id}' in Supabase")
         return rows[0]
 
+    # The spot row is read fresh whenever we're online (orientation, buoys or cam may have been
+    # changed in Supabase); the cached copy is only for --offline.
+    if not offline:
+        (RAW / f"spot_{spot_id}.json").unlink(missing_ok=True)
     row = cached(f"spot_{spot_id}.json", offline, spot_row)
     SPOT = {**row, "beach_orientation": float(row["beach_orientation"])}
     if not row.get("buoy_ids"):
@@ -786,6 +792,8 @@ def main() -> int:
     args = parser.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
+    if args.station and len(args.spot or []) != 1:
+        parser.error("--station needs exactly one --spot (each spot has its own nearest station)")
     for spot_id in args.spot or list(STATIONS):
         configure(spot_id, args.station, args.offline)
         print(f"[backtest] {spot_id}: buoy {BUOY_NAME} {PLACES['buoy_km']:.1f} km, station "

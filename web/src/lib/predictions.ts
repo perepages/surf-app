@@ -1,12 +1,15 @@
-// AI-corrected scores written by the nightly job into the `predictions` table.
-// Only rows with an ai_score are used; until a model exists this returns nothing.
+// AI-corrected scores written by the jobs into the `predictions` table.
+// Only rows with the model's Waves and Shape are used; until a model exists this returns nothing.
 
 import { selectRows, supabaseConfigured } from './supabase'
 
 export interface AiPrediction {
   /** Unix seconds, UTC. */
   validAt: number
+  /** overall(aiWaves, aiShape): wave quality without comfort (the app adds comfort per user). */
   aiScore: number
+  aiWaves: number | null
+  aiShape: number | null
   reason: string | null
   modelVersion: string | null
 }
@@ -14,6 +17,8 @@ export interface AiPrediction {
 interface PredictionRow {
   valid_at: string
   ai_score: number
+  ai_waves: number | null
+  ai_shape: number | null
   reason: string | null
   model_version: string | null
 }
@@ -35,17 +40,24 @@ export async function getAiPredictions(
     const rows = await selectRows<PredictionRow>(
       'predictions',
       [
-        'select=valid_at,ai_score,reason,model_version',
+        'select=valid_at,ai_score,ai_waves,ai_shape,reason,model_version',
         `spot_id=eq.${encodeURIComponent(spotId)}`,
         `valid_at=gte.${iso(fromUnix)}`,
         `valid_at=lte.${iso(toUnix)}`,
-        'ai_score=not.is.null',
+        'ai_waves=not.is.null',
       ].join('&'),
       signal,
     )
     for (const r of rows) {
       const validAt = Math.round(Date.parse(r.valid_at) / 1000)
-      out.set(validAt, { validAt, aiScore: r.ai_score, reason: r.reason, modelVersion: r.model_version })
+      out.set(validAt, {
+        validAt,
+        aiScore: r.ai_score,
+        aiWaves: r.ai_waves,
+        aiShape: r.ai_shape,
+        reason: r.reason,
+        modelVersion: r.model_version,
+      })
     }
   } catch (err) {
     if (!signal?.aborted) console.warn('Could not load AI predictions, keeping the last copy', err)

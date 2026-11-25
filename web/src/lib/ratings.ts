@@ -80,6 +80,13 @@ export const CROWDS = [
 ] as const
 
 export type WaveSize = (typeof WAVE_SIZES)[number]['id']
+/** "Was the weather the problem?" Stored as ratings.weather_problem (true / false / null). */
+export const WEATHER_ANSWERS = [
+  { id: 'yes', label: 'Yes: rain, cold or storm' },
+  { id: 'no', label: 'No' },
+] as const
+export type WeatherAnswer = (typeof WEATHER_ANSWERS)[number]['id']
+
 export type Surface = (typeof SURFACES)[number]['id']
 export type Crowd = (typeof CROWDS)[number]['id']
 
@@ -91,6 +98,8 @@ export interface RatingInput {
   waveSize: WaveSize | null
   surface: Surface | null
   crowd: Crowd | null
+  /** "Was the weather the problem?": yes / no / not answered. */
+  weather: WeatherAnswer | null
   comment: string
   /** true only when the device checked it was within 3 km; otherwise left empty. */
   nearBeach: true | null
@@ -252,6 +261,18 @@ function forecastShown(spot: Spot, forecast: Forecast, hour: HourConditions, sco
       wind_gusts: hour.windGusts,
       sea_level_height: hour.tide,
       is_day: hour.isDay,
+      secondary_swell_wave_height: hour.secondarySwellHeight ?? null,
+      secondary_swell_wave_period: hour.secondarySwellPeriod ?? null,
+      secondary_swell_wave_direction: hour.secondarySwellDirection ?? null,
+      wind_wave_height: hour.windWaveHeight ?? null,
+      wind_wave_period: hour.windWavePeriod ?? null,
+      wind_wave_direction: hour.windWaveDirection ?? null,
+      sea_surface_temperature: hour.seaTemp ?? null,
+      precipitation: hour.precipitation ?? null,
+      precipitation_probability: hour.precipProb ?? null,
+      weather_code: hour.weatherCode ?? null,
+      cape: hour.cape ?? null,
+      temperature_2m: hour.airTemp ?? null,
     },
     score: {
       value: score.value,
@@ -259,6 +280,10 @@ function forecastShown(spot: Spot, forecast: Forecast, hour: HourConditions, sco
       reason: score.reason,
       source: score.source,
       model_version: score.modelVersion ?? null,
+      engine: 'physics-v1',
+      waves: score.parts?.waves ?? null,
+      shape: score.parts?.shape ?? null,
+      comfort: score.parts?.comfort ?? null,
     },
   }
 }
@@ -275,6 +300,7 @@ export async function saveRating(spot: Spot, forecast: Forecast, score: Score, r
     wave_size: r.waveSize,
     surface: r.surface,
     crowd: r.crowd,
+    weather_problem: r.weather == null ? null : r.weather === 'yes',
     comment: comment || null,
     source: 'community',
     device_id: deviceId(),

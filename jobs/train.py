@@ -4,42 +4,41 @@ For every active spot (or --spot ID):
   1. Ratings: hidden ones (flagged as spam/outliers in /admin) are skipped; the same device +
      surfed_at counts once. Weights: source 'me' and 'past_session' 1.0, 'community' with
      near_beach = true 0.8, other 'community' 0.5.
-  2. Features come from the forecast the surfer SAW (`forecast_shown`): the app's `conditions`,
-     or for past sessions the screenshot hour nearest surfed_at. Anything missing there is
-     filled from the `forecasts` row for that hour (shortest lead, else the historical row).
-       swell_height, swell_period            m, s ('ncep_gfswave025' swell 0.0 = missing)
-       swell_dir_rel                         swell direction minus beach orientation, -180..180
-       wave_height                           combined sea state (not in the brief; added because
-                                             in Vilanova wind sea often matters more than swell,
-                                             and the simple score is built on it)
-       wind_speed                            km/h
-       wind_onshore, wind_cross              wind split relative to the beach (km/h):
-                                             onshore > 0 blows in, < 0 = offshore; cross = along
-       tide                                  sea_level_height, m (mostly storm surge here)
-       solar_hour                            UTC hour + lon/15: daylight cycle, no time zones/DST
-       month                                 1-12 (UTC)
-       lead_hours                            hours between fetch and the rated hour (0 if fetched
-                                             after it; unknown for screenshots = missing)
-       simple_score                          the app's simple 1-5 score for those conditions
-  3. Targets (each model learns a CORRECTION, so with little data it stays close to the
-     baseline instead of guessing; prediction = baseline + correction, clipped):
-       overall       1-5 rating (main model); baseline = simple score
-       wave_height   real height: the rated wave size converted to metres if given, else the
-                     nearest buoy's Hm0 that hour (first buoy in spots.buoy_ids with a reading);
-                     baseline = forecast wave height (swell height if missing)
-  4. Evaluation: ratings from the last --test-days (14) days are the test set; the model is fit
-     on older ratings only and compared there with the simple score (overall) and the raw
-     forecast height (wave_height). Needs --min-train older and --min-test recent ratings.
+  2. Features (engine "physics-v1", docs/surf_theory.md): the forecast the surfer SAW
+     (`forecast_shown`: the app's `conditions`, or for past sessions the screenshot hour nearest
+     surfed_at), gaps filled from the `forecasts` row for that hour (shortest lead, else the
+     historical row), plus the 72 h before it from earlier runs (wind 6/12/24 h, rain). All of
+     jobs/physics.py `features()` (energy, breaking height, swell-window angle and factor,
+     cleanliness, conflict penalty, per-train energy + angle, relative wind, gusts, wind
+     history, sea level, rain, weather, SST, GFS second opinion incl. tertiary swell) + solar
+     hour, month, lead hours and the physics Waves / Shape scores themselves.
+  3. Targets (each model learns a CORRECTION to the physics score, so with little data it stays
+     close to it instead of guessing; prediction = physics + correction, clipped 1-5):
+       waves   rated wave size (m) -> the physics breaking-height scale; no size rated = the
+               physics Waves of the first buoy's reading that hour (Hm0, Tp, direction)
+       shape   rated surface (glassy 5, clean 4.5, choppy 3, messy 1.5); none rated = inferred
+               from the overall rating by inverting overall = f(waves, shape) (only when waves
+               >= 2.5: on small days the rating says little about shape; half weight; never
+               when the weather spoiled it: the "Was the weather the problem?" tap, or no answer
+               and >= 1 mm of rain measured in the session by jobs/rating_weather.py)
+       real_height (m, as before): rated size in metres, else the buoy's Hm0; baseline =
+               forecast wave height
+     Comfort and safety are never learned: rules only (jobs/physics.py).
+  4. Evaluation: ratings from the last --test-days (14) days are the test set; the models are
+     fit on older ratings only. Main measure = the overall rating vs overall(AI waves, AI
+     shape), compared with the physics overall (also reported: the old simple score, and the
+     Waves / Shape errors against their targets). Needs --min-train older and --min-test recent
+     ratings.
   5. Saved (unless --dry-run) after refitting on ALL rows, so the newest days are used:
        storage  models/<spot>/<version>.joblib (+ .json metrics, readable without Python)
        table    models row: version, artifact_path, accuracy, is_active = false, and
                 n_ratings / n_spots / scope (migration 12; the app says "Learned from N
                 surfer reports")
-     accuracy = 1 - (weighted MAE of the overall model on the test set) / 4 (1.0 = always exact).
+     accuracy = 1 - (weighted MAE of the AI overall on the test set) / 4 (1.0 = always exact).
      The bundle records max_rating_id: the newest rating it learned from.
   6. Activated (is_active = true, via the `activate_model` function = one transaction) only if
      it beats BOTH:
-       - the simple score, on the last 14 days, and
+       - the physics score, on the last 14 days, and
        - the current active model, on the test ratings the current model never saw (rating id
          newer than its max_rating_id). Last night's model was trained on almost all of the
          last 14 days, so comparing on those would always favour it. Fewer than --min-test such
@@ -87,7 +86,7 @@ import numpy as np
 import sklearn
 from sklearn.ensemble import HistGradientBoostingRegressor
 
-from jobs import log
+from jobs import log, physics
 from jobs.check_connections import ROOT, env, load_dotenv
 from jobs.collect_forecast import HttpError, Supabase, http
 from jobs.explore import HISTORICAL, angle_diff, fetch_all, round_hour, simple_score, ts
@@ -97,11 +96,33 @@ BUCKET = "models"
 UTC = timezone.utc
 Row = dict[str, Any]
 
-FEATURES = ["swell_height", "swell_period", "swell_dir_rel", "wave_height", "wind_speed",
-            "wind_onshore", "wind_cross", "tide", "solar_hour", "month", "lead_hours",
-            "simple_score"]
+ENGINE = "physics-v1"
+# jobs/physics.py features used by the models (absolute directions left out: the angles
+# relative to the beach carry the same information and pool across spots).
+PHYSICS_FEATURES = [
+    "main_height", "main_period", "main_angle", "main_window_factor", "main_energy",
+    "main_power_kw", "main_wavelength_m", "breaking_height", "other_energy", "cleanliness",
+    "conflict_penalty", "swell_energy_eff", "swell_angle_to_main", "secondary_swell_energy_eff",
+    "secondary_swell_angle_to_main", "wind_energy_eff", "wind_angle_to_main",
+    "gfs_cleanliness", "gfs_conflict_penalty", "gfs_breaking_height", "gfs_tertiary_energy_eff",
+    "wave_height", "wave_period", "wind_speed", "wind_gusts", "wind_rel", "wind_onshore",
+    "wind_cross", "gust_ratio", "wind_mean_6h", "wind_onshore_6h", "wind_mean_12h",
+    "wind_onshore_12h", "wind_mean_24h", "wind_onshore_24h", "sea_level", "precipitation",
+    "precipitation_probability", "weather_code", "cape", "temperature_2m",
+    "sea_surface_temperature", "rain_24h", "rain_max24h_72h",
+]
+FEATURES = PHYSICS_FEATURES + ["main_part_code", "solar_hour", "month", "lead_hours",
+                               "physics_waves", "physics_shape"]
+PART_CODE = {"swell": 0.0, "secondary_swell": 1.0, "wind": 2.0}
+# The engine before physics-v1 (kept only to compare a still-active old model fairly).
+OLD_FEATURES = ["swell_height", "swell_period", "swell_dir_rel", "wave_height", "wind_speed",
+                "wind_onshore", "wind_cross", "tide", "solar_hour", "month", "lead_hours",
+                "simple_score"]
 # target -> (baseline field, clip range)
-TARGETS = {"overall": ("simple", (1.0, 5.0)), "real_height": ("forecast_height", (0.0, 6.0))}
+TARGETS = {"waves_t": ("physics_waves", (1.0, 5.0)), "shape_t": ("physics_shape", (1.0, 5.0)),
+           "real_height": ("forecast_height", (0.0, 6.0)),
+           "overall": ("simple", (1.0, 5.0))}  # old engine only
+HISTORY_H = 72  # hours before a rating read for wind history and rain
 
 WEIGHT_ME = 1.0           # 'me' and 'past_session'
 WEIGHT_NEAR_BEACH = 0.8   # 'community' with near_beach = true
@@ -110,6 +131,25 @@ WEIGHT_COMMUNITY = 0.5    # other 'community'
 # Rated wave size -> metres (rough face height at a beach break; flat = nothing to ride).
 WAVE_SIZE_M = {"flat": 0.1, "ankle": 0.25, "knee": 0.45, "waist": 0.7, "chest": 1.0,
                "head": 1.6, "overhead": 2.2}
+
+# Rated surface -> Shape score.
+SURFACE_SHAPE = {"glassy": 5.0, "clean": 4.5, "choppy": 3.0, "messy": 1.5}
+# Shape inferred from the overall rating is noisy (a half-point rating step moves it by
+# ~4/(waves-1)/0.6 points): only on days with real waves, and with half the weight.
+SHAPE_FROM_OVERALL_MIN_WAVES = 2.5
+INFERRED_SHAPE_WEIGHT = 0.5
+# Measured rain (station, session window) that counts as "the weather spoiled it" when the
+# surfer didn't answer the "Was the weather the problem?" tap.
+SPOILED_RAIN_MM = 1.0
+
+
+def weather_spoiled(r: Row) -> bool:
+    """The surfer said the weather was the problem, or didn't say and the station measured
+    real rain during the session (jobs/rating_weather.py)."""
+    if r.get("weather_problem") is not None:
+        return bool(r["weather_problem"])
+    measured = r.get("weather_measured")
+    return isinstance(measured, dict) and (measured.get("rain_mm") or 0) >= SPOILED_RAIN_MM
 
 IN_CHUNK = 100  # timestamps per PostgREST `in.(...)` filter
 
@@ -138,7 +178,7 @@ def rows_at_hours(db: Supabase, table: str, select: str, spot_id: str, column: s
 
 
 def load_ratings(db: Supabase, spot_id: str) -> list[Row]:
-    rows = fetch_all(db, "ratings", "select=id,surfed_at,overall,wave_size,source,device_id,"
+    rows = fetch_all(db, "ratings", "select=id,surfed_at,overall,wave_size,surface,weather_problem,weather_measured,source,device_id,"
                      f"near_beach,forecast_shown&spot_id=eq.{spot_id}&hidden=eq.false&order=surfed_at,id")
     seen, out = set(), []
     for r in rows:
@@ -196,7 +236,8 @@ def best_db_forecast(rows: list[Row]) -> Row | None:
     return rows[0] if rows else None
 
 
-def features(cond: Row, lead: float | None, spot: Row, when: datetime) -> dict[str, float]:
+def old_features(cond: Row, lead: float | None, spot: Row, when: datetime) -> dict[str, float]:
+    """The pre-physics feature set (OLD_FEATURES minus simple_score)."""
     faces = spot["beach_orientation"]
     swell_h, swell_p = num(cond.get("swell_wave_height")), num(cond.get("swell_wave_period"))
     if cond.get("marine_model") == "ncep_gfswave025" and swell_h == 0:
@@ -222,21 +263,64 @@ def features(cond: Row, lead: float | None, spot: Row, when: datetime) -> dict[s
     }
 
 
+def model_input(cond: Row, spot: Row, series: dict, when: datetime, lead: float | None
+                ) -> tuple[dict[str, float], Row]:
+    """(feature dict for FEATURES, physics.evaluate result) for one hour."""
+    res = physics.evaluate({**cond, "valid_at": when}, spot, series)
+    f = res["features"]
+    x = {k: num(f.get(k)) for k in PHYSICS_FEATURES}
+    x.update({
+        "main_part_code": PART_CODE.get(f.get("main_part"), float("nan")),
+        "solar_hour": (when.hour + when.minute / 60 + spot["lon"] / 15) % 24,
+        "month": float(when.month),
+        "lead_hours": num(lead),
+        "physics_waves": res["waves"],
+        "physics_shape": res["shape"],
+    })
+    return x, res
+
+
+def history_rows(db: Supabase, spot_id: str, start: datetime, end: datetime) -> list[Row]:
+    """Forecast rows valid in [start, end) from every run, oldest run first (so
+    physics.series_of keeps the newest numbers for each hour)."""
+    q = urllib.parse.urlencode({"select": "*", "spot_id": f"eq.{spot_id}", "order": "fetched_at.desc",
+                                "limit": "1000"})
+    q += f"&valid_at=gte.{urllib.parse.quote(iso(start))}&valid_at=lt.{urllib.parse.quote(iso(end))}"
+    return list(reversed(http(f"{db.base}/forecasts?{q}", db.headers) or []))
+
+
+def waves_from_size(size: str) -> float:
+    """Rated size (face height, m) on the physics Waves scale (no period bonus: not observed)."""
+    return physics.clamp(physics.interp(WAVE_SIZE_M[size], physics.WAVES_STEPS))
+
+
+def waves_from_buoy(o: Row, spot: Row) -> float:
+    row = {"valid_at": datetime(2000, 1, 1, tzinfo=UTC), "swell_wave_height": o["wave_height"],
+           "swell_wave_period": o.get("wave_period"), "swell_wave_direction": o.get("wave_direction")}
+    return physics.waves_score(physics.features(row, spot))
+
+
+def shape_from_overall(overall: float, waves: float) -> float | None:
+    """Invert overall = 1 + (w - 1) x (0.4 + 0.6 x (s - 1) / 4). None on small days."""
+    if waves < SHAPE_FROM_OVERALL_MIN_WAVES:
+        return None
+    ratio = (overall - 1) / (waves - 1)
+    return physics.clamp(1 + 4 * (ratio - 0.4) / 0.6)
+
+
 def build_dataset(db: Supabase, spot: Row) -> list[Row]:
     ratings = load_ratings(db, spot["id"])
     hours = sorted({round_hour(r["surfed_at"]) for r in ratings})
-    fc_rows = rows_at_hours(db, "forecasts", "valid_at,lead_hours,marine_model,wave_height,"
-                            "wave_period,wave_direction,swell_wave_height,swell_wave_period,"
-                            "swell_wave_direction,sea_level_height,wind_speed,wind_direction",
-                            spot["id"], "valid_at", hours, "valid_at,fetched_at")
+    fc_rows = rows_at_hours(db, "forecasts", "*", spot["id"], "valid_at", hours,
+                            "valid_at,fetched_at")
     by_hour: dict[datetime, list[Row]] = {}
     for f in fc_rows:
         by_hour.setdefault(ts(f["valid_at"]), []).append(f)
     buoys = list(spot.get("buoy_ids") or [])
-    obs = rows_at_hours(db, "observations", "buoy_id,observed_at,wave_height", spot["id"],
-                        "observed_at", hours, "observed_at") if buoys else []
-    buoy_at = {(ts(o["observed_at"]), o["buoy_id"]): o["wave_height"] for o in obs
-               if o["wave_height"] is not None}
+    obs = rows_at_hours(db, "observations", "buoy_id,observed_at,wave_height,wave_period,"
+                        "wave_direction", spot["id"], "observed_at", hours, "observed_at") if buoys else []
+    buoy_at = {(ts(o["observed_at"]), o["buoy_id"]): o for o in obs if o["wave_height"] is not None}
+    series_at: dict[datetime, dict] = {}
 
     data = []
     for r in ratings:
@@ -252,18 +336,38 @@ def build_dataset(db: Supabase, spot: Row) -> list[Row]:
                 lead = db_fc.get("lead_hours")  # nothing was shown: the stored forecast's lead
         if cond.get("wave_height") is None and cond.get("swell_wave_height") is None:
             continue  # no forecast at all for this hour: nothing to learn from
+        if h not in series_at:
+            series_at[h] = physics.series_of(history_rows(db, spot["id"], h - timedelta(hours=HISTORY_H), h))
+        x, res = model_input(cond, spot, series_at[h], h, lead)
+        buoy = next(((b, buoy_at[(h, b)]) for b in buoys if (h, b) in buoy_at), None)
         if r.get("wave_size") in WAVE_SIZE_M:
             real_h, real_src = WAVE_SIZE_M[r["wave_size"]], f"rated {r['wave_size']}"
+            waves_t, waves_src = waves_from_size(r["wave_size"]), f"rated {r['wave_size']}"
+        elif buoy:
+            real_h, real_src = buoy[1]["wave_height"], f"buoy {buoy[0]}"
+            waves_t, waves_src = waves_from_buoy(buoy[1], spot), f"buoy {buoy[0]}"
         else:
-            real_h, real_src = next(((buoy_at[(h, b)], f"buoy {b}") for b in buoys if (h, b) in buoy_at),
-                                    (None, None))
-        fc_height = first_num(cond.get("wave_height"), cond.get("swell_wave_height"))
+            real_h = real_src = waves_t = waves_src = None
+        overall = float(r["overall"])
+        if r.get("surface") in SURFACE_SHAPE:
+            shape_t, shape_src = SURFACE_SHAPE[r["surface"]], f"rated {r['surface']}"
+        elif weather_spoiled(r):  # the weather spoiled it: the overall says nothing about shape
+            shape_t = shape_src = None
+        else:
+            shape_t = shape_from_overall(overall, waves_t if waves_t is not None else res["waves"])
+            shape_src = None if shape_t is None else "from overall"
+        simple = float(simple_score(cond, spot["beach_orientation"]))
         data.append({
-            "id": r["id"], "spot_id": spot["id"], "surfed_at": r["surfed_at"], "source": r["source"], "weight": weight(r),
-            "overall": float(r["overall"]), "real_height": real_h, "real_height_source": real_src,
-            "simple": float(simple_score(cond, spot["beach_orientation"])),
-            "forecast_height": fc_height,
-            "x": {**features(cond, lead, spot, h), "simple_score": float(simple_score(cond, spot["beach_orientation"]))},
+            "id": r["id"], "spot_id": spot["id"], "surfed_at": r["surfed_at"], "source": r["source"],
+            "weight": weight(r), "overall": overall, "weather_spoiled": weather_spoiled(r),
+            "waves_t": waves_t, "waves_source": waves_src, "shape_t": shape_t, "shape_source": shape_src,
+            "shape_t_weight": INFERRED_SHAPE_WEIGHT if shape_src == "from overall" else 1.0,
+            "real_height": real_h, "real_height_source": real_src,
+            "physics_waves": res["waves"], "physics_shape": res["shape"],
+            "physics_overall": res["overall"], "simple": simple,
+            "forecast_height": first_num(cond.get("wave_height"), cond.get("swell_wave_height")),
+            "x": x,
+            "x_old": {**old_features(cond, lead, spot, h), "simple_score": simple},
         })
     return data
 
@@ -307,16 +411,18 @@ def usable(rows: list[Row], target: str) -> list[Row]:
     return [r for r in rows if r[target] is not None and r[base] is not None]
 
 
-def fit(rows: list[Row], target: str) -> HistGradientBoostingRegressor | None:
-    """Learn target - baseline. None if no row has both."""
+def fit(rows: list[Row], target: str, features: list[str] = FEATURES) -> HistGradientBoostingRegressor | None:
+    """Learn target - baseline. None if no row has both. `features`: OLD_FEATURES for the
+    pre-physics engine (backtest comparison)."""
     base, clip = TARGETS[target]
     rows = usable(rows, target)
     if not rows:
         return None
     model = make_model(len(rows))
-    model.fit(matrix(rows), np.array([r[target] - r[base] for r in rows]),
-              sample_weight=np.array([r["weight"] for r in rows]))
-    model.baseline_, model.clip_, model.features_ = base, clip, list(FEATURES)  # predict the same way later
+    model.fit(matrix(rows, features), np.array([r[target] - r[base] for r in rows]),
+              sample_weight=np.array([r["weight"] * r.get(f"{target}_weight", 1.0) for r in rows]))
+    model.baseline_, model.clip_, model.features_ = base, clip, list(features)  # predict the same way later
+    model.target_ = target
     return model
 
 
@@ -330,28 +436,61 @@ def wmae(pred: np.ndarray, truth: np.ndarray, w: np.ndarray) -> float:
     return float(np.sum(np.abs(pred - truth) * w) / np.sum(w))
 
 
-def overall_mae(model: HistGradientBoostingRegressor | None, rows: list[Row]) -> float:
-    """Weighted error in points of `model` on rows (None = the simple score)."""
-    pred = np.array([d["simple"] for d in rows]) if model is None else predict(model, rows)
+def corrected(model: HistGradientBoostingRegressor | None, rows: list[Row], baseline: str) -> np.ndarray:
+    """Model prediction, or the baseline field itself when there is no model."""
+    if model is None:
+        return np.array([r[baseline] for r in rows], dtype=float)
+    return predict(model, rows)
+
+
+def bundle_overall(bundle: Row, rows: list[Row]) -> np.ndarray:
+    """Overall 1-5 a model bundle gives `rows`. physics-v1: overall(AI waves, AI shape);
+    the old engine: its overall model on the old features (rows need "x_old")."""
+    if bundle.get("engine") == ENGINE:
+        w = corrected(bundle.get("waves"), rows, "physics_waves")
+        s = corrected(bundle.get("shape"), rows, "physics_shape")
+        return np.array([physics.overall_score(a, b) for a, b in zip(w, s)])
+    return predict(bundle["overall"], [{"x": r["x_old"], "simple": r["simple"]} for r in rows])
+
+
+def overall_mae(bundle: Row | None, rows: list[Row]) -> float:
+    """Weighted error in points of `bundle` on rows (None = the physics score); ratings spoiled
+    by the weather are left out (unless that's all there is)."""
+    rows = [d for d in rows if not d.get("weather_spoiled")] or rows
+    pred = (np.array([d["physics_overall"] for d in rows]) if bundle is None
+            else bundle_overall(bundle, rows))
     return wmae(pred, np.array([d["overall"] for d in rows]), np.array([d["weight"] for d in rows]))
 
 
-def evaluate(train: list[Row], test: list[Row]) -> tuple[Row, HistGradientBoostingRegressor]:
-    """Fit on train only, measure on test. Returns (metrics, the train-only overall model)."""
+def evaluate(train: list[Row], test: list[Row]) -> tuple[Row, Row]:
+    """Fit on train only, measure on test. Returns (metrics, the train-only candidate bundle)."""
     m: Row = {"n_train": len(train), "n_test": len(test),
               "test_from": iso(min(d["surfed_at"] for d in test)),
               "test_to": iso(max(d["surfed_at"] for d in test))}
-    model = fit(train, "overall")
-    y = np.array([d["overall"] for d in test])
-    w = np.array([d["weight"] for d in test])
-    pred = predict(model, test)
-    simple = np.array([d["simple"] for d in test])
+    candidate = {"engine": ENGINE, "waves": fit(train, "waves_t"), "shape": fit(train, "shape_t")}
+    # The models predict wave quality: ratings spoiled by the weather would blame them for rain.
+    test_o = [d for d in test if not d.get("weather_spoiled")] or test
+    m["n_test_overall"] = len(test_o)
+    y = np.array([d["overall"] for d in test_o])
+    w = np.array([d["weight"] for d in test_o])
+    pred = bundle_overall(candidate, test_o)
+    base = np.array([d["physics_overall"] for d in test_o])
+    simple = np.array([d["simple"] for d in test_o])
     m["overall"] = {
-        "model_mae": wmae(pred, y, w), "simple_mae": wmae(simple, y, w),
+        "model_mae": wmae(pred, y, w), "physics_mae": wmae(base, y, w), "simple_mae": wmae(simple, y, w),
         "model_within_1": float(np.average(np.abs(pred - y) <= 1, weights=w)),
-        "simple_within_1": float(np.average(np.abs(simple - y) <= 1, weights=w)),
+        "physics_within_1": float(np.average(np.abs(base - y) <= 1, weights=w)),
     }
-    m["overall"]["beats_simple"] = m["overall"]["model_mae"] < m["overall"]["simple_mae"]
+    m["overall"]["beats_baseline"] = m["overall"]["model_mae"] < m["overall"]["physics_mae"]
+    for target, name in (("waves_t", "waves"), ("shape_t", "shape")):
+        tr, te = usable(train, target), usable(test, target)
+        part: Row = {"n_train": len(tr), "n_test": len(te)}
+        if te:
+            yt = np.array([d[target] for d in te])
+            wt = np.array([d["weight"] * d.get(f"{target}_weight", 1.0) for d in te])
+            part["model_mae"] = wmae(corrected(candidate[name], te, f"physics_{name}"), yt, wt)
+            part["physics_mae"] = wmae(np.array([d[f"physics_{name}"] for d in te]), yt, wt)
+        m[name] = part
 
     h_train, h_test = usable(train, "real_height"), usable(test, "real_height")
     if h_train and h_test:
@@ -368,7 +507,7 @@ def evaluate(train: list[Row], test: list[Row]) -> tuple[Row, HistGradientBoosti
         m["wave_height"] = {"n_train": len(h_train), "n_test": len(h_test),
                             "note": "not enough ratings with a real height (rated size or buoy) to test"}
     m["accuracy"] = 1 - m["overall"]["model_mae"] / 4
-    return m, model
+    return m, candidate
 
 
 # ---------- current model + decision ----------
@@ -414,7 +553,7 @@ def active_model(db: Supabase, spot_id: str) -> Row | None:
     return rows[0] if rows else None
 
 
-def decide(db: Supabase, spot_id: str, candidate: HistGradientBoostingRegressor, metrics: Row,
+def decide(db: Supabase, spot_id: str, candidate: Row, metrics: Row,
            test: list[Row], min_test: int, scope: str) -> Row:
     """Should the new model become this spot's active model? See the module doc, step 6."""
     out: Row = {"current_version": None, "current_scope": None, "compared_on": 0,
@@ -424,11 +563,11 @@ def decide(db: Supabase, spot_id: str, candidate: HistGradientBoostingRegressor,
         out.update(activate=activate, why=why)
         return out
 
-    beats_simple = metrics["overall"]["beats_simple"]
+    beats_simple = metrics["overall"]["beats_baseline"]
     current = active_model(db, spot_id)
     if not current:
         return done(beats_simple, "no current model; " + ("beats" if beats_simple else "doesn't beat")
-                    + " the simple score")
+                    + " the physics score")
     out["current_version"] = current["version"]
     try:
         bundle = load_bundle(db, current["artifact_path"])
@@ -439,12 +578,12 @@ def decide(db: Supabase, spot_id: str, candidate: HistGradientBoostingRegressor,
     except Exception as exc:  # unusable current model: predict.py can't use it either
         out["current_error"] = f"{type(exc).__name__}: {exc}"
         return done(beats_simple, "current model can't be loaded; "
-                    + ("beats" if beats_simple else "doesn't beat") + " the simple score")
+                    + ("beats" if beats_simple else "doesn't beat") + " the physics score")
     out["current_scope"] = bundle.get("scope", "spot")
     if scope == "general" and out["current_scope"] == "spot":
         return done(False, "the spot has its own model; a general model never replaces it")
     if not beats_simple:
-        return done(False, "doesn't beat the simple score")
+        return done(False, "doesn't beat the physics score")
     # Only ratings the current model never saw make a fair test for both.
     seen_until = bundle.get("max_rating_id", -1)
     unseen = [d for d in test if d["id"] > seen_until]
@@ -453,7 +592,7 @@ def decide(db: Supabase, spot_id: str, candidate: HistGradientBoostingRegressor,
         return done(False, f"only {len(unseen)} test ratings are newer than the current model "
                            f"(need {min_test}); keeping it")
     out["candidate_mae"] = overall_mae(candidate, unseen)
-    out["current_mae"] = overall_mae(bundle["overall"], unseen)
+    out["current_mae"] = overall_mae(bundle, unseen)
     better = out["candidate_mae"] < out["current_mae"]
     return done(better, f"on {len(unseen)} new ratings: off by {out['candidate_mae']:.2f} vs current "
                         f"{out['current_mae']:.2f}" + ("" if better else "; keeping the current one"))
@@ -529,10 +668,17 @@ def log_metrics(label: str, train: list[Row], test: list[Row], metrics: Row) -> 
     o, wh = metrics["overall"], metrics["wave_height"]
     log.info(f"[{label}] test {metrics['test_from'][:10]} .. {metrics['test_to'][:10]}: "
              f"{len(train)} train / {len(test)} test ratings")
-    log.info(f"[{label}] overall: model off by {o['model_mae']:.2f}, simple score by "
-             f"{o['simple_mae']:.2f} points (within 1 point: {o['model_within_1']:.0%} vs "
-             f"{o['simple_within_1']:.0%}) -> {'beats' if o['beats_simple'] else 'does NOT beat'} "
-             "the simple score")
+    log.info(f"[{label}] overall: AI off by {o['model_mae']:.2f}, physics by {o['physics_mae']:.2f}, "
+             f"old simple score by {o['simple_mae']:.2f} points (within 1 point: "
+             f"{o['model_within_1']:.0%} vs {o['physics_within_1']:.0%}) -> "
+             f"{'beats' if o['beats_baseline'] else 'does NOT beat'} the physics score")
+    for name in ("waves", "shape"):
+        part = metrics[name]
+        if "model_mae" in part:
+            log.info(f"[{label}] {name}: AI off by {part['model_mae']:.2f}, physics by "
+                     f"{part['physics_mae']:.2f} ({part['n_test']} test ratings with a target)")
+        else:
+            log.info(f"[{label}] {name}: no test ratings with a {name} target")
     if "model_mae_m" in wh:
         log.info(f"[{label}] wave height: model off by {wh['model_mae_m']:.2f} m, raw forecast by "
                  f"{wh['forecast_mae_m']:.2f} m ({wh['n_test']} test ratings)")
@@ -561,20 +707,23 @@ def finish(db: Supabase, scope: str, spots: list[Row], data: list[Row], train: l
                     "spots_trained_on": sorted({d["spot_id"] for d in data}),
                     "weights": {"me/past_session": WEIGHT_ME, "community near_beach": WEIGHT_NEAR_BEACH,
                                 "community": WEIGHT_COMMUNITY},
-                    "accuracy_definition": "1 - weighted MAE of overall on the test set / 4",
+                    "engine": ENGINE,
+                    "accuracy_definition": "1 - weighted MAE of the AI overall on the test set / 4",
                     "saved_model_fitted_on": "all rows (train + test)",
                     "sklearn": sklearn.__version__})
     bundle = {
-        "version": version, "scope": scope, "spots_trained_on": metrics["spots_trained_on"],
+        "engine": ENGINE, "version": version, "scope": scope, "spots_trained_on": metrics["spots_trained_on"],
         "features": FEATURES, "wave_size_m": WAVE_SIZE_M, "metrics": metrics,
         "reference": reference(data),
         # The newest rating this model learned from: the next night's comparison uses only
         # ratings newer than this (see decide()).
         "max_rating_id": max(d["id"] for d in data),
-        # Each predicts baseline + correction: see predict(). The baseline (simple score /
-        # forecast height) must be computed the same way when the model is used.
-        "overall": fit(data, "overall"),
-        "wave_height": fit(data, "real_height"),  # None if no real heights at all
+        # Each predicts baseline + correction: see predict(). The baseline (physics Waves /
+        # Shape, forecast height) must be computed the same way when the model is used.
+        # None = no rows with that target: the physics score is used as it is.
+        "waves": fit(data, "waves_t"),
+        "shape": fit(data, "shape_t"),
+        "wave_height": fit(data, "real_height"),
     }
     if args.dry_run:
         log.ok(JOB, f"[{label}] would save {version} (accuracy {metrics['accuracy']:.3f}); dry run")
@@ -619,7 +768,8 @@ def main() -> int:
         return 1
     db = Supabase(url, key)
     now = datetime.now(UTC).replace(second=0, microsecond=0)
-    spots = http(f"{db.base}/spots?select=id,lat,lon,beach_orientation,buoy_ids,active&order=id", db.headers)
+    spots = http(f"{db.base}/spots?select=id,lat,lon,beach_orientation,swell_window_min,"
+                 "swell_window_max,buoy_ids,active&order=id", db.headers)
     targets = [s for s in spots if (s["id"] == args.spot if args.spot else s["active"])]
     if not targets:
         log.fail(JOB, "No matching spots.")

@@ -12,6 +12,9 @@ import { CROWDS, type Crowd } from '../lib/ratings'
 import { linkClick, spotPath } from '../lib/route'
 import { spotsNow, type SpotListState, type SpotNow } from '../lib/spotList'
 import { resolveScore } from '../scoring/resolveScore'
+import { seriesOf } from '../scoring/physics'
+import { usePrefs } from '../lib/prefs'
+import { PrefsButton } from './PrefsButton'
 import type { Score } from '../scoring/types'
 
 /** "Updated" times are in the phone's own time zone (spots may be in several). */
@@ -56,6 +59,7 @@ export const splitName = (name: string) => ({
 export function HomeScreen({ state, retry, now, online }: { state: SpotListState; retry: () => void; now: number; online: boolean }) {
   const [view, setView] = useState<View>(readView)
   const { ids: favIds, toggle } = useFavourites()
+  const { prefs } = usePrefs()
   const choose = (v: View) => {
     setView(v)
     try {
@@ -72,11 +76,11 @@ export function HomeScreen({ state, retry, now, online }: { state: SpotListState
         ...s,
         favourite: favIds.has(s.spot.id),
         score: s.hour
-          ? resolveScore(s.hour, s.spot, s.aiScore == null ? undefined : { validAt: s.hour.time, aiScore: s.aiScore, reason: null, modelVersion: null })
+          ? resolveScore(s.hour, s.spot, s.ai ?? undefined, seriesOf(state.data.hours[s.spot.id] ?? []), prefs)
           : null,
       }))
       .sort(rank)
-  }, [state, now, favIds])
+  }, [state, now, favIds, prefs])
 
   const favourites = ranked.filter((s) => s.favourite)
   const others = ranked.filter((s) => !s.favourite)
@@ -105,6 +109,9 @@ export function HomeScreen({ state, retry, now, online }: { state: SpotListState
           ))}
         </div>
       </header>
+      <div className="-mt-2 flex px-3 sm:px-6">
+        <PrefsButton />
+      </div>
 
       {state.status === 'ready' && (!online || state.stale) && !state.refreshing && (
         <p role="status" className="mx-4 rounded-lg border border-sand/40 px-3 py-2 text-sm text-sand sm:mx-8">

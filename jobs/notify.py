@@ -64,6 +64,8 @@ def shown_score(row: dict[str, Any]) -> tuple[int, bool]:
     """(1-5 score the app shows, is it the AI's). Round half up like JS Math.round."""
     if row.get("ai_score") is not None:
         return max(1, min(5, int(float(row["ai_score"]) + 0.5))), True
+    if row.get("physics_overall") is not None:  # physics engine (migration 17)
+        return max(1, min(5, int(float(row["physics_overall"]) + 0.5))), False
     return int(row["simple_score"]), False
 
 
@@ -266,7 +268,7 @@ def notify_spot(db: NotifySupabase, sender: Sender | None, spot: dict[str, Any] 
                           "using 06-18 UTC as daylight")
             windows = None
         rows = db.get("predictions", {
-            "select": "valid_at,simple_score,ai_score", "spot_id": f"eq.{spot_id}",
+            "select": "valid_at,simple_score,physics_overall,ai_score", "spot_id": f"eq.{spot_id}",
             "and": f"(valid_at.gte.{iso(now - timedelta(hours=1))},valid_at.lt.{iso(now + HORIZON)})",
             "order": "valid_at",
         })

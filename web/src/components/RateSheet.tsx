@@ -12,6 +12,8 @@ import {
   whenOptions,
   type Crowd,
   type Surface,
+  type WeatherAnswer,
+  WEATHER_ANSWERS,
   type WaveSize,
   type WhenOption,
 } from '../lib/ratings'
@@ -55,6 +57,7 @@ function Sheet({ onClose, spot, forecast, scores, now, onSent }: Props) {
   const [overall, setOverall] = useState<ScoreValue | null>(null)
   const [waveSize, setWaveSize] = useState<WaveSize | null>(null)
   const [surface, setSurface] = useState<Surface | null>(null)
+  const [weather, setWeather] = useState<WeatherAnswer | null>(null)
   const [crowd, setCrowd] = useState<Crowd | null>(null)
   const [comment, setComment] = useState('')
   const [status, setStatus] = useState<Status>({ kind: 'editing' })
@@ -91,7 +94,7 @@ function Sheet({ onClose, spot, forecast, scores, now, onSent }: Props) {
     setStatus({ kind: 'sending' })
     try {
       const nearBeach = location === 'near' ? true : null // only "yes" is ever stored
-      await saveRating(spot, forecast, shownScore, { when, overall, waveSize, surface, crowd, comment, nearBeach })
+      await saveRating(spot, forecast, shownScore, { when, overall, waveSize, surface, crowd, weather, comment, nearBeach })
       setStatus({ kind: 'done', forecast: shownScore, said: overall })
       onSent?.()
     } catch (err) {
@@ -196,6 +199,10 @@ function Sheet({ onClose, spot, forecast, scores, now, onSent }: Props) {
               </Group>
               <Group title="Surface">
                 <Choices label="Surface" items={SURFACES} value={surface} onChange={setSurface} cols="grid-cols-3" />
+              </Group>
+              <Group title="Was the weather the problem?">
+                <Choices label="Was the weather the problem?" items={WEATHER_ANSWERS} value={weather} onChange={setWeather} cols="grid-cols-[2fr_1fr]" />
+                <p className="mt-1.5 text-xs text-mist">So a rainy day with good waves isn’t learned as bad waves.</p>
               </Group>
               <Group title="Crowd">
                 <Choices label="Crowd" items={CROWDS} value={crowd} onChange={setCrowd} cols="grid-cols-4" />

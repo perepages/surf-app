@@ -1,6 +1,7 @@
 import { memo } from 'react'
 import { m, useReducedMotion } from 'framer-motion'
 import { AiBadge, ScoreBadge } from './ScoreChip'
+import { ScoreDetails } from './ScoreDetails'
 import { PowerMeter, TideMini, WindArrow } from './Glyphs'
 import { wavePower, windInfo } from '../lib/conditions'
 import { compass } from '../lib/geo'
@@ -81,7 +82,7 @@ export const Verdict = memo(function Verdict({ score, hour, next, dayHours, spot
           <AiBadge />
           {score.simple && (
             <span className="text-[13px] text-mist">
-              Forecast alone said {score.simple.value} · {score.simple.label}
+              Rules alone said {score.simple.value} · {score.simple.label}
             </span>
           )}
         </div>
@@ -89,6 +90,7 @@ export const Verdict = memo(function Verdict({ score, hour, next, dayHours, spot
       <p className="max-w-[38ch] text-lg leading-snug font-medium">{score.reason}</p>
       {score.source === 'ai' && learnedFrom && <p className="-mt-2 text-[13px] text-mist">{learnedFrom}</p>}
       {firstLight != null && <p className="-mt-2 text-mist">It's dark. First light at {hhmm(firstLight, timezone)}.</p>}
+      <ScoreDetails score={score} hour={hour} />
 
       <dl className="grid grid-cols-2 gap-x-3 gap-y-4 border-t border-line pt-4">
         <div className="flex flex-col gap-0.5">

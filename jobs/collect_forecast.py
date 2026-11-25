@@ -1,8 +1,12 @@
 """Hourly: store the Open-Meteo forecast for every active spot in Supabase `forecasts`.
 
 For each spot in the `spots` table (active = true) this fetches
-  - Open-Meteo Marine: waves, primary swell, wind waves, sea level (tide + surge, if available)
-  - Open-Meteo Forecast: wind speed, direction and gusts at 10 m
+  - Open-Meteo Marine (best_match): waves, primary + secondary swell, wind waves, swell peak
+    period, sea surface temperature, sea level (tide + surge, if available)
+  - Open-Meteo Marine (ncep_gfswave016): the full GFS-Wave partition set incl. the TERTIARY
+    swell, stored apart in the gfs_* columns (never mixed with best_match's trains)
+  - Open-Meteo Forecast: wind speed, direction and gusts at 10 m, precipitation,
+    precipitation probability, weather code, CAPE, air temperature
 and writes one row per (spot, fetched_at, valid_at) for valid_at = the fetch hour .. +96 h.
 
   fetched_at = the UTC hour the job ran in (minutes cut off), so lead_hours (a generated
@@ -19,7 +23,9 @@ of adding copies.
 
 Nulls: if the default marine model (best_match) returns nulls for an hour, the marine part of
 that hour is taken from ncep_gfswave025 instead; `marine_model` records which one was used.
-Sea level only exists in the default model, so it is never replaced (null stays null).
+Sea level and sea temperature only exist in the default model, so they are never replaced
+(null stays null). If the GFS partition request or the wind/weather request fails, those
+columns stay empty for the run (warning); the waves are still stored.
 
 Run from the repo root (reads .env locally, GitHub secrets in Actions):
   python -m jobs.collect_forecast             # fetch + write to Supabase
@@ -54,23 +60,42 @@ WEATHER_URL = "https://api.open-meteo.com/v1/forecast"
 DEFAULT_MODEL = "best_match"
 FALLBACK_MARINE_MODEL = "ncep_gfswave025"
 
+GFS_PARTITION_MODEL = "ncep_gfswave016"
+
 # Open-Meteo name -> forecasts column. Wave vars go through the null fallback.
-WAVE_VARS = {
-    "wave_height": "wave_height",
-    "wave_period": "wave_period",
-    "wave_direction": "wave_direction",
-    "swell_wave_height": "swell_wave_height",
-    "swell_wave_period": "swell_wave_period",
-    "swell_wave_direction": "swell_wave_direction",
-    "wind_wave_height": "wind_wave_height",
+# CORE_WAVE_VARS decide whether an hour needs the fallback (a null in an extra one, e.g. peak
+# period, doesn't); when it is used, ALL wave vars of that hour come from the fallback model.
+CORE_WAVE_VARS = ["wave_height", "wave_period", "wave_direction", "swell_wave_height",
+                  "swell_wave_period", "swell_wave_direction", "wind_wave_height"]
+WAVE_VARS = {v: v for v in CORE_WAVE_VARS + [
+    "swell_wave_peak_period",
+    "secondary_swell_wave_height", "secondary_swell_wave_period",
+    "secondary_swell_wave_direction",
+    "wind_wave_period", "wind_wave_direction",
+]}
+SEA_VARS = {  # best_match only, never replaced by the fallback
+    "sea_level_height_msl": "sea_level_height",            # m, includes storm surge
+    "sea_surface_temperature": "sea_surface_temperature",  # deg C
 }
-TIDE_VARS = {"sea_level_height_msl": "sea_level_height"}  # m, includes storm surge
+TIDE_VARS = SEA_VARS  # old name
+GFS_VARS = {f"{p}_wave_{q}": f"gfs_{p}_wave_{q}"
+            for p in ("swell", "secondary_swell", "tertiary_swell", "wind")
+            for q in ("height", "period", "direction")}
 WIND_VARS = {
     "wind_speed_10m": "wind_speed",          # km/h (Open-Meteo default)
     "wind_direction_10m": "wind_direction",  # degrees, where the wind comes from
     "wind_gusts_10m": "wind_gusts",          # km/h
 }
-SMALLINT_COLUMNS = {"wave_direction", "swell_wave_direction", "wind_direction"}
+WEATHER_VARS = {
+    "precipitation": "precipitation",                          # mm in the preceding hour
+    "precipitation_probability": "precipitation_probability",  # %
+    "weather_code": "weather_code",                            # WMO code, 95/96/99 = thunder
+    "cape": "cape",                                            # J/kg
+    "temperature_2m": "temperature_2m",                        # deg C
+}
+SMALLINT_COLUMNS = {c for c in [*WAVE_VARS.values(), *GFS_VARS.values(), "wind_direction"]
+                    if c.endswith("direction")}
+INT_COLUMNS = {"precipitation_probability", "weather_code"}
 
 # Longest lead time stored. 72 h is the longest comparison we need; 96 h covers the
 # 4 days the app shows, so later AI predictions have a forecast for every hour on screen.
@@ -196,18 +221,19 @@ def fetch_hourly(url: str, spot: dict[str, Any], variables: list[str], model: st
 
 def fetch_marine(spot: dict[str, Any]) -> tuple[dict[str, dict], dict[str, str]]:
     """Marine values per hour + which model produced each hour's waves."""
-    wave_vars, tide_vars = list(WAVE_VARS), list(TIDE_VARS)
+    wave_vars, sea_vars = list(WAVE_VARS), list(SEA_VARS)
     try:
-        primary = fetch_hourly(MARINE_URL, spot, wave_vars + tide_vars, DEFAULT_MODEL)
+        primary = fetch_hourly(MARINE_URL, spot, wave_vars + sea_vars, DEFAULT_MODEL)
     except HttpError as exc:
         if exc.code != 400:
             raise
-        # Sea level is "if available": if Open-Meteo ever rejects it, keep the waves.
-        log.warn(JOB, f"[{spot['id']}] marine API refused sea level ({exc}); continuing without it")
+        # Sea level / temperature are "if available": if Open-Meteo rejects them, keep the waves.
+        log.warn(JOB, f"[{spot['id']}] marine API refused sea level/temperature ({exc}); "
+                      "continuing without them")
         primary = fetch_hourly(MARINE_URL, spot, wave_vars, DEFAULT_MODEL)
 
     models = {t: DEFAULT_MODEL for t in primary}
-    gaps = [t for t, row in primary.items() if any(row.get(v) is None for v in wave_vars)]
+    gaps = [t for t, row in primary.items() if any(row.get(v) is None for v in CORE_WAVE_VARS)]
     if not gaps:
         return primary, models
 
@@ -218,8 +244,8 @@ def fetch_marine(spot: dict[str, Any]) -> tuple[dict[str, dict], dict[str, str]]
         alt = fallback.get(t)
         if alt is None:
             continue
-        nulls_now = sum(primary[t].get(v) is None for v in wave_vars)
-        nulls_alt = sum(alt[v] is None for v in wave_vars)
+        nulls_now = sum(primary[t].get(v) is None for v in CORE_WAVE_VARS)
+        nulls_alt = sum(alt[v] is None for v in CORE_WAVE_VARS)
         if nulls_alt < nulls_now:
             # Whole wave set from one model, so a row never mixes two models' waves.
             primary[t].update(alt)
@@ -228,7 +254,12 @@ def fetch_marine(spot: dict[str, Any]) -> tuple[dict[str, dict], dict[str, str]]
 
 
 def fetch_wind(spot: dict[str, Any]) -> dict[str, dict]:
-    return fetch_hourly(WEATHER_URL, spot, list(WIND_VARS), DEFAULT_MODEL)
+    """Wind + weather in one request (same API and model)."""
+    return fetch_hourly(WEATHER_URL, spot, list(WIND_VARS) + list(WEATHER_VARS), DEFAULT_MODEL)
+
+
+def fetch_gfs_partitions(spot: dict[str, Any]) -> dict[str, dict]:
+    return fetch_hourly(MARINE_URL, spot, list(GFS_VARS), GFS_PARTITION_MODEL)
 
 
 # ---------- rows ----------
@@ -242,6 +273,8 @@ def column_value(column: str, value: Any) -> Any:
         return None
     if column in SMALLINT_COLUMNS:
         return int(round(value)) % 360
+    if column in INT_COLUMNS:
+        return int(round(value))
     return float(value)
 
 
@@ -254,6 +287,12 @@ def build_rows(spot: dict[str, Any], fetched_at: datetime) -> list[dict[str, Any
         log.warn(JOB, f"[{spot['id']}] wind request failed ({type(exc).__name__}: {exc}); "
                       "storing waves with empty wind")
         wind = {}
+    try:
+        gfs = fetch_gfs_partitions(spot)
+    except Exception as exc:
+        log.warn(JOB, f"[{spot['id']}] {GFS_PARTITION_MODEL} partitions failed "
+                      f"({type(exc).__name__}: {exc}); storing without the gfs_* columns")
+        gfs = {}
     last = fetched_at + timedelta(hours=MAX_LEAD_HOURS)
     rows = []
     for api_time in sorted(marine):
@@ -267,8 +306,10 @@ def build_rows(spot: dict[str, Any], fetched_at: datetime) -> list[dict[str, Any
             "marine_model": models[api_time],
         }
         # Every row gets every column (PostgREST bulk upserts need identical keys).
-        for source, values in ((WAVE_VARS, marine[api_time]), (TIDE_VARS, marine[api_time]),
-                               (WIND_VARS, wind.get(api_time, {}))):
+        for source, values in ((WAVE_VARS, marine[api_time]), (SEA_VARS, marine[api_time]),
+                               (WIND_VARS, wind.get(api_time, {})),
+                               (WEATHER_VARS, wind.get(api_time, {})),
+                               (GFS_VARS, gfs.get(api_time, {}))):
             for om_name, column in source.items():
                 row[column] = column_value(column, values.get(om_name))
         rows.append(row)
@@ -283,8 +324,11 @@ def summary(rows: list[dict[str, Any]]) -> str:
     fallback = sum(r["marine_model"] != DEFAULT_MODEL for r in rows)
     return (f"{len(rows)} rows, valid {rows[0]['valid_at']} .. {rows[-1]['valid_at']}; "
             f"{fallback} hours from {FALLBACK_MARINE_MODEL}; nulls: wave_height "
-            f"{count_null('wave_height')}, wind_speed {count_null('wind_speed')}, "
-            f"sea_level {count_null('sea_level_height')}")
+            f"{count_null('wave_height')}, secondary {count_null('secondary_swell_wave_height')}, "
+            f"gfs_tertiary {count_null('gfs_tertiary_swell_wave_height')}, "
+            f"wind_speed {count_null('wind_speed')}, rain {count_null('precipitation')}, "
+            f"sea_level {count_null('sea_level_height')}, "
+            f"sst {count_null('sea_surface_temperature')}")
 
 
 # ---------- entry point ----------

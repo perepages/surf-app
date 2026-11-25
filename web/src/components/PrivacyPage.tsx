@@ -26,6 +26,10 @@ export function PrivacyPage() {
           <li>Your answers: when (today or yesterday, part of the day), the 1-5 score, and wave size, surface, crowd and comment if you gave them.</li>
           <li>Your comment is shown publicly on the spot screen under today’s reports, with your score and the part of the day. Nothing else about you is shown with it, so don’t write your name in it.</li>
           <li>The forecast numbers and score the app showed for that hour, so we can see where the forecast was wrong.</li>
+          <li>
+            Later, the weather public stations measured near the beach around that time (rain, wind, temperature; Meteocat open data), so
+            a rainy day with good waves isn’t learned as bad waves.
+          </li>
           <li>The app version.</li>
           <li>A random device id, created on this phone. It isn’t linked to you; it lets us limit each phone to 3 ratings a day and spot spam.</li>
           <li>“At the beach: yes”, only if you tapped the location check and your phone found it was within 3 km of the beach.</li>
@@ -73,7 +77,7 @@ export function PrivacyPage() {
         <p>
           The app itself and the last forecast, AI scores and report summaries it loaded (so it opens
           instantly and works offline), the times of your last ratings (for the 3-a-day limit), the
-          device id, and your favourite spots and list/map choice (never sent anywhere). Clearing this site’s data, or removing the app, removes all of it.
+          device id, and your favourite spots, list/map choice and “Your surf” settings (level, max wave size, rain; never sent anywhere). Clearing this site’s data, or removing the app, removes all of it.
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-kelp px-3 py-2.5">
           <span className="text-sm text-mist">Device id:</span>

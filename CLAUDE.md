@@ -62,6 +62,29 @@ Garraf not recommended: no cam, no coastal wind station), zone 2 Barcelona.
   and never installed locally. `clean.ps1` frees rebuildable space (asks first).
 - Keep the **Status** section below up to date with what's done.
 
+## Principles (decided — don't re-debate unless I say so)
+
+Spots
+- Only list spots that are already public and well known (on mainstream forecast sites). No secret or local-only spots, ever.
+- Anyone can request a spot be removed via a simple form; I review every request.
+
+Data
+- Objective data comes first: buoy, measured wind, cam crowd count. Human ratings are a bonus, never the only source of truth.
+- Ratings are shown only as aggregates (median, min. 3 reports), never individually.
+- Every rating is weighted by how well it matches objective data; devices get a trust score. Fake ratings must have no visible effect.
+- Users can rate privately: used to improve their own forecast and the model, never shown publicly.
+
+Crowds
+- The crowd forecast exists to spread people across the day ("quieter after 16h"), not to send everyone to the same place.
+- No "it's epic, go now!" mass alerts for small spots; alerts are personal and opt-in.
+
+Respect
+- Every spot page shows surf etiquette and any local rules.
+- Partner with local clubs and surf schools rather than work around them.
+
+Money
+- Free and ad-free while it's a personal project. Before any ads, sponsors or payments: check data licences (Open-Meteo, Windy, Puertos del Estado) and talk to a gestor.
+
 ## Status
 - [x] Project context written (this file, new plan: Supabase + GitHub Actions + PWA).
 - [x] Step 1 (2026-11-20): monorepo skeleton. `web/` (Vite React-TS, Tailwind v4 via
@@ -739,6 +762,239 @@ Garraf not recommended: no cam, no coastal wind station), zone 2 Barcelona.
   Viladecans is closer but has only 2 m wind): same score 58%, GO right 81%, said GO wrongly 3%,
   missed GO 17%; AI miss 0.61 -> 0.53. Dry runs: forecast, buoys and train include it (general
   model). Committed with steps 28-31 on `test-preview` (not pushed).
+- [x] Review of steps 28-31 (2026-11-25): no keys, passwords or `.env` in any file (incl. the
+  new untracked `docs/`) or anywhere in git history on any branch (checked by value: service key,
+  Windy key, admin password, VAPID private key; and by `sb_secret_` / JWT pattern); `.env` and
+  `explore_out/` ignored. `main` = `64d8f25` (steps 28-31 are live in the jobs).
+  - Live check since the push: every scheduled run green; all 5 spots get forecasts, both buoys
+    (no gaps: each run refetches 48 h), predictions (simple only, no model yet: 3 ratings), and
+    snapshots for the 3 cams (`crowd_water` empty, as expected). No alerts exist yet. Thinning
+    has nothing to do until ~6 Dec (oldest live run 22 Nov). Thinning code, `cam_area.py` and
+    migration 14 reviewed: no bugs found.
+  - **GitHub drops most scheduled runs**: "Hourly collect" ran only 8 times in 2.7 days (every
+    5-12 h: 22 Nov 20:44, 23 Nov 01:47 / 10:52 / 22:43, 24 Nov 06:58 / 18:56, 25 Nov 03:03 /
+    13:05 UTC) and "Nightly train" starts ~13:00 UTC instead of 03:23. Effects: the app is
+    unaffected (it reads Open-Meteo itself; predictions are written 72 h ahead), buoys are
+    complete, but surf alerts are checked only ~3x/day (can arrive hours late) and there are
+    few cam snapshots. Fix proposed, not built (needs my OK + a GitHub token): trigger the
+    workflows from Supabase `pg_cron` + `pg_net` calling GitHub's `workflow_dispatch` hourly.
+  - Fixed: `backtest.py` reused a cached copy of the spot row forever (a changed orientation or
+    buoy would be ignored); now re-read whenever online, cache only for `--offline`.
+    `--station` without exactly one `--spot` applied one station to every spot; now an error.
+    Tested: Sitges results unchanged, error shown.
+  - Not fixed (minor): `cam_area --save` always records the image size as 400x224 (true for all
+    Windy previews today; informational only); each spot fetches the same buoys separately (5x
+    the same PORTUS request per run; fine at this size); `backtest.py` depends on PORTUS's
+    unofficial history endpoint and on `STATIONS` being filled in by hand for new spots.
+- [x] Step 32 (2026-11-25): physics-engine upgrade from `docs/surf_theory.md`, part 1 of 7 =
+  per-spot beach normal + swell window. Migration `...0015_swell_window` (**not applied yet**:
+  apply in the SQL editor): `spots.swell_window_min/max` (clockwise; min > max crosses north;
+  both null = normal +- 90); `beach_orientation` stays the column name and means the beach
+  normal. Values (confirmed by me): vilanova 165 / 105-240 (Vilanova port blocks E: the spot is
+  on Ribes Roges, west of the port), sitges 170 (was 165) / 100-240, castelldefels 180 / 90-250,
+  barceloneta 135 (was 130) / 55-190 (Barcelona port blocks SW), bogatell 135 (was 130) / 55-200.
+  Plan: soft window edges (energy fades over the last 15 deg). `jobs/coastline.py` (stdlib):
+  OSM coastline + breakwaters/piers via public Overpass servers (tries 3, remembers the one that
+  answers; 1-4 min per spot, they are often overloaded), normal = sea side of the coast within
+  0.8 km, window = directions with no land/wall within 30 km (hits < 0.4 km ignored), clipped to
+  normal +- 90. `add_spot.py` step 5 now suggests both and asks for the window (`105-240`, `SE-SW`,
+  `none`). Tested: `python -m jobs.coastline` on all 5 spots reproduces the values; window parser.
+  Migration 15 applied 2026-11-25 (checked: all 5 rows have the values above).
+  Next parts: 3 physics module, 4 AI on derived features, 5 app, 6 rating weather tap,
+  7 backtest old vs new.
+- [x] Step 33 (2026-11-25): engine upgrade part 2 = all wave trains + weather in `forecasts`.
+  Probed Open-Meteo at the spots: best_match = Météo-France wave model (same cell as
+  `meteofrance_wave`): primary + secondary swell + wind waves + SST + sea level, **no tertiary**;
+  only NOAA GFS-Wave (`ncep_gfswave016`/`025`) has tertiary; ECMWF WAM gives total waves only;
+  DWD EWAM/GWAM have no secondary. GFS splits the sea differently (same swell in another slot,
+  missing train = 0.0), so it is stored as its own set, never mixed. Migration
+  `...0016_forecast_partitions_weather` (**not applied yet**): `gfs_{swell,secondary_swell,
+  tertiary_swell,wind}_wave_{height,period,direction}` (from `ncep_gfswave016`),
+  `sea_surface_temperature`, `precipitation` (mm, preceding hour), `precipitation_probability`,
+  `weather_code` (WMO), `cape`, `temperature_2m`. `collect_forecast.py` now also fills the
+  existing `swell_wave_peak_period`, `secondary_swell_wave_*`, `wind_wave_period/direction`;
+  weather rides on the wind request; GFS partitions are one extra request per spot. Fallback
+  (`ncep_gfswave025`) decided only on the 7 core wave vars (peak period is null beyond ~90 h),
+  and replaces ALL wave trains of that hour. GFS or weather failing = those columns empty +
+  warning, waves still stored. Tested: dry run all 5 spots (no nulls), forced GFS/weather 503,
+  forced best_match nulls. Rows ~2x wider (~40 MB/year/spot after thinning). Migration 16
+  applied 2026-11-25; live run stored all new columns for all 5 spots (checked in the table).
+- [x] Step 34 (2026-11-25): engine upgrade part 3 = `jobs/physics.py` (stdlib; constants at
+  the top, named for the TS copy that step 5 adds). Not used by predict/train/app yet.
+  - Trains (best_match set): energy H²T x window factor (cos of angle to the normal x soft
+    15° edge; outside the window = 0). Main = the swell with most energy reaching the beach
+    (wind sea only if there is no swell). Trains < 30° from the main add size (incl. wind
+    sea); others go into cleanliness (main / all) and conflict penalty (share x 0.5 crossed /
+    1.0 opposing > 120°). GFS set gives AI-only features (cleanliness, conflict, breaking
+    height, tertiary energy); GFS 0.0 = absent.
+  - Waves 1-5 from Komar breaking height (x0.8 at <= 4 s rising to x1 at 6 s) of the main
+    family: 0.30 m -> 1, 0.45 -> 2, 0.70 -> 3, 1.05 -> 4, 1.60 -> 5, linear; -0.5 if T < 5 s,
+    +0.5 if T >= 8 s. Shape 1-5 = 5 minus: wind table (surf_theory.md section 4), gusts > 1.6x
+    (-0.5), 1.5 x conflict penalty (max 2), cleanliness < 0.75 (-0.5) / < 0.5 (-1), leftover
+    chop (mean onshore component over 6 h >= 20 km/h while now light, -0.5). Overall =
+    1 + (waves - 1) x (0.4 + 0.6 x (shape - 1)/4). Comfort 1-5 (rain -2.5 / drizzle -1,
+    air < 10 °C, water < 14 °C -0.5 each, dark = 1). Verdict = overall - 0.5 x (5 - comfort),
+    1 if dark or thunderstorm. Safety: thunder (code 95/96/99, or CAPE >= 1000 with rain),
+    water quality (>= 20 mm in any 24 h of the last 72 h; all 5 spots are urban), rip (breaking
+    >= 1.5 m and < 20° from the normal), too big for level (beginner 0.8 m, intermediate 1.5 m)
+    or max size. Prefs: `dont_mind_rain`, `level`, `max_wave_m`. Wetsuit tip from SST.
+  - `features()` = flat dict of every raw + derived value (energy, power, wavelength, breaking
+    height, angle, window factor, cleanliness, conflict, per-train energy and angle to main,
+    relative wind + onshore/cross components, gust ratio, wind mean + onshore mean 6/12/24 h,
+    sea level, rain now / 24 h / max 24 h in 72 h, weather, SST, daylight).
+  - Reason: "Clean 0.6 m at 5 s from the SSW, light offshore, but 70% chance of rain", "Too
+    small: …", "1.5 m from the E, but it can't reach this beach", thunder / after dark.
+    `mess` text ("Secondary swell from the S is crossing the main SSW swell at 37°: peaky and
+    inconsistent"; "running against" > 120°) only when crossed/mixed trains cost >= 0.5 points.
+  - `python -m jobs.physics --spot ID [--hours N --all-hours --mind-rain --level L]`: newest
+    stored run next to the old simple score; history from every earlier run (newest wins).
+  - Tests: `python -m unittest jobs.tests.test_physics` (19, first automated tests in `jobs/`).
+  - First look on live data (25 Nov run, small days): physics is lower than the old score
+    (e.g. Vilanova Thu 13h old 4, physics 2): the old one used the combined wave height incl.
+    wind chop from another direction. Which is closer to reality = step 7's backtest.
+- [x] Step 35 (2026-11-25): engine upgrade part 4 = the AI learns Waves and Shape separately
+  (engine `physics-v1`). Comfort and safety stay rules.
+  - `train.py`: features = 44 of `physics.features()` (absolute directions left out) + main
+    train type, solar hour, month, lead hours, physics Waves/Shape; wind/rain history from the
+    72 h before each rating (every earlier run, newest wins). Two correction models (same
+    HistGradientBoosting set-up): Waves target = rated size (m) on the breaking-height scale,
+    else the first buoy's reading through `physics.waves_score`; Shape target = rated surface
+    (glassy 5 / clean 4.5 / choppy 3 / messy 1.5), else inferred by inverting overall =
+    f(waves, shape), only when waves >= 2.5 and at half weight (a half-point rating step swings
+    it ~2 points), skipped when the rating says the weather was the problem (step 6 column).
+    AI overall = `physics.overall_score(ai_waves, ai_shape)`; activation needs it to beat the
+    **physics** overall on the last 14 days (and the current model, as before). Bundle:
+    `engine`, `waves`, `shape`, `wave_height`; an old-engine model is still compared fairly
+    (old features kept as `x_old`) but `predict.py` ignores it (warning, physics only).
+  - `predict.py` also writes `physics_waves/shape/overall` every hour and `ai_waves/ai_shape`;
+    `ai_score` = AI overall without comfort (app applies comfort per user, step 5).
+    `simple_score` still written for the current app. Migration
+    `...0017_predictions_waves_shape` (**not applied yet: apply before pushing, else every
+    hourly predict step fails**).
+  - `reasons.py`: exact Shapley over 8 groups (wind, wind history, swell, crossed swells, tide,
+    weather, time, season; 256 variants) of overall(AI waves, AI shape) with the hour's physics
+    scores fixed; only when the AI changes the shown value vs the physics one.
+  - Tests: `jobs/tests/test_train_targets.py` (4) + physics (19). Synthetic check (800 ratings,
+    planted "long period works better" + "crossed seas hurt more"): overall error AI 0.36 vs
+    physics 0.43, waves 0.10 vs 0.33, shape 0.50 vs 0.57; reasons name the swell period. A
+    first version with Shape inferred on all days didn't beat physics (fixed as above). Live
+    dry runs: predict (all 5 spots, with and without the synthetic model), train (3 ratings ->
+    too few, unchanged); forced crashing model and old-engine model -> physics rows still written.
+  - `backtest.py` imports the old features for now (step 7 moves it to physics-v1).
+  - Migration 17 applied 2026-11-25 (by me).
+- [x] Step 36 (2026-11-25): engine upgrade part 5 = the app uses the physics score. No new npm
+  packages.
+  - `web/src/scoring/physics.ts`: line-by-line copy of `jobs/physics.py` (same constants).
+    `npm run physics-parity` (`web/scripts/physics-parity.mjs` + `jobs/physics_cases.py`):
+    random cases (72 h history, windows, prefs) through both; 2000/2000 match (scores within
+    0.011, reason / mess / wetsuit text, warnings). Text numbers round halves up on both sides
+    (`fmt`). Run it after changing either file.
+  - Data: Open-Meteo requests add secondary swell, wind-wave period/direction, SST,
+    precipitation, precipitation probability, weather code, CAPE, air temperature (forecast
+    cache v4; the home list asks 72 past hours for wind/rain history, saved copy
+    `spot-list:v2`). Spots carry `swellWindowMin/Max` (DB + built-in Vilanova copy).
+  - `resolveScore`: physics with the whole fetched range as history and the user's prefs;
+    with a model, the predictions' `ai_waves/ai_shape` replace Waves/Shape, comfort + safety
+    stay rules (`verdictFrom`). Score = verdict; labels "Storm" (thunder), "Dark", "Too big"
+    (capped by your limit). Predictions are read only where `ai_waves` is set (old-engine rows
+    ignored).
+  - **Too big now changes the verdict** (decided while testing: a beginner got GO 4 on 2.3 m):
+    above your limit at most 2 (MAYBE), above 1.5x the limit 1 (SKIP); in both py + ts, tested.
+  - UI: `ScoreDetails.tsx` under the reason on "Right now": Waves / Shape / Comfort bars with a
+    word (small / clean / rain…), safety warnings (coral), "WHY THE WAVES ARE MESSY" box, rain /
+    thunderstorm line + air/water temperature + wetsuit. "Rules alone said" next to an AI
+    score. Hour by hour: new Sky column (🌧 %, ⛈, ⚠ with the warning text as label). Chart:
+    the rules line is the physics overall ("Physics rules"); scoreboard via migration
+    `...0018_model_info_physics` (**not applied yet**; until then "Who called it" compares the
+    AI with the old simple score).
+  - Preferences: `lib/prefs.ts` (`surf:prefs` in localStorage, never sent, synced across
+    screens/tabs) + lazy `PrefsSheet.tsx` from "⚙ Your surf" (spot page and home): I don't mind
+    rain, level (not set / beginner 0.8 m / intermediate 1.5 m / advanced), max breaking height
+    (any / 0.5-2.5 m). Privacy page mentions it.
+  - Ratings now store every new condition field and `score.engine/waves/shape/comfort` in
+    `forecast_shown`. `notify.py` alerts on `ai_score`, else `physics_overall`, else the old
+    `simple_score` (wave quality only: alerts don't know about rain/thunder yet).
+  - Checked in the dev app at phone size with the forecast saved in that browser edited (no
+    database writes; edits removed afterwards): night (SKIP / Dark), rainy big frontal day (rip
+    + too-big warnings, comfort 2.5, beginner -> SKIP "Too big", max 1.2 m -> MAYBE), stubbed AI
+    predictions (MAYBE 2 AI-corrected, "Rules alone said 4"), crossing swell ("WHY THE WAVES ARE
+    MESSY"; fixed wording "Main swell … crossing the main …" -> "Another swell …"), settings
+    sheet, hour sheet Sky column, home list. `tsc`, lint, build pass (main JS 311 -> 332 KB).
+    Not checked on a real phone. Bump `web/package.json` (0.5.0) when releasing.
+  - Migration 18 applied 2026-11-25 (by me).
+  - Level / max size (explained to me 2026-11-25): asked only in the optional "⚙ Your surf"
+    sheet, default not set = no effect; compared with the forecast breaking height; stays on
+    the phone, never stored with ratings or used in training. Limits 0.8 / 1.5 m and the
+    MAYBE/SKIP cap are Claude's starting values, not from surf_theory.md.
+- [x] Step 37 (2026-11-25): engine upgrade part 6 = ratings separate waves from weather.
+  - Migration `...0019_rating_weather` (**not applied yet**): `spots.wind_station` /
+    `weather_station` (Meteocat XEMA codes; vilanova + sitges YR/YR, castelldefels XL/XL,
+    barceloneta + bogatell Y7 wind / X4 el Raval rain+temperature, because the harbour station
+    Y7 measures wind only), `ratings.weather_problem` (public insert grant) and
+    `ratings.weather_measured` (jsonb, no public grant).
+  - Rating form: optional "Was the weather the problem?" (Yes: rain, cold or storm / No; tap
+    again clears), between Surface and Crowd; stored as true / false / null. Fast path still
+    3 taps.
+  - `jobs/rating_weather.py` (stdlib; hourly step "Measured weather for ratings" in
+    `collect.yml`, also `python -m jobs.collect --only rating_weather`): ratings without
+    `weather_measured`, surfed > 2 h and < `--days` 10 days ago -> XEMA readings (dataset
+    nzvn-apee, 30-min, UTC, ~1 h delay): rain in surfed_at +- 1 h and in the 24 h before,
+    temperature, humidity, sunshine, vector-mean wind (km/h, direction), max gust, reading
+    count, stations. No readings yet = retried next hour. Missing migration = warning, exit 0.
+    The open dataset doesn't reach 2022 (the 3 past sessions stay without it).
+  - Training: `weather_spoiled(r)` = the tap says yes, or no answer and >= 1 mm of rain measured
+    in the session. Then Shape isn't inferred from the overall, and the rating is left out of
+    the overall comparison (AI vs physics vs current model; the models predict wave quality).
+    Waves targets still use it.
+  - Tested: measured weather for a fake 11:00 UTC rating at YR, XL and Y7+X4 (real readings:
+    ~1.2-1.5 mm rain, gusts 35-43 km/h), future rating skipped, job without migration (warning);
+    unit tests (6 targets + 20 physics); synthetic training unchanged (AI 0.36 vs physics 0.43);
+    form at phone size with the save caught in the page (no database write): tap selected,
+    `weather_problem: true` + new condition fields + `score.waves/shape/comfort` in the payload;
+    fake send removed from that browser's 3-a-day log. `tsc`, lint, build pass. Privacy page
+    mentions the measured weather.
+  - Migration 19 applied 2026-11-25; live test: public key inserted a rating with
+    `weather_problem`, was refused setting `weather_measured` and reading ratings; the job's real
+    run filled the test rating (YR: 1.2 mm, gusts 42 km/h); test rating deleted.
+- [x] Step 38 (2026-11-25): engine upgrade part 7 = backtest old vs new,
+  `python -m jobs.backtest_engines [--spot ID] [--offline]` (same 12 months 22 Nov 2025 -
+  21 Nov 2026 + cache as `jobs.backtest`; adds every wave train, archived rain / probability /
+  weather code / CAPE / temperature, GFS-016 partitions, Meteocat measured rain + temperature;
+  report `explore_out/backtest/engines.md` + `.json`, LOCAL ONLY). `train.fit` takes a feature
+  list again (`OLD_FEATURES` for the old engine: the old backtest's model was silently using the
+  new feature names since step 35; fixed). Physics result now also has `comfort_causes`.
+  Results, daylight hours, all 5 spots (T-old / T-new = old / physics rules on the measured
+  buoy + station numbers):
+  - Wave quality: each engine wins on its own truth; on T-new the physics error is 0.57-0.67
+    vs old 0.56-0.72 (Vilanova 0.70 -> 0.60, Barceloneta 0.70 -> 0.58, Castelldefels equal).
+    New engine is cautious: said GO wrongly ~1% (old 5-8%), but missed GO 15-20% (old 10-12%);
+    on T-old it misses 23-32%.
+  - Biggest difference = swell window: 525-817 daylight hours/spot with >= 0.3 m swell from a
+    blocked direction: old said GO 13-48%, new 1-4%; the offshore buoy (can't see ports) says
+    GO 40-66%. **Unverified: needs ratings or a cam** (e.g. Vilanova E swell behind the port).
+  - Crossed-swell logic changes the error by <= 0.03 points; can't be checked (buoy measures
+    the total sea).
+  - Weather: in daylight hours with >= 0.5 mm measured rain (112-133 per spot): old said GO
+    47-76%, new 6-20%; new flags 88-91% of rainy hours; rain penalty on dry hours 5-7%.
+    Thunder flags 21-53 h/spot/year, only 6-15 of them measured wet.
+  - AI (train 9 months, test 3): new two-model AI error on T-new 0.46-0.57 (physics 0.60-0.67,
+    old AI 0.59-0.85), missed GO 9-13%; Shape error 0.78-0.90 -> 0.54-0.66, Waves 0.77-0.95 ->
+    0.60-0.71. On T-old the old AI stays best (0.58-0.65). These AIs learn from measurements,
+    not ratings (the live models train on ratings: 3 so far).
+  - Not done (ideas): calibrate `WAVES_STEPS` for Open-Meteo's low bias (the AI does it per spot
+    once trained); check window edges with ratings/cam.
+- [ ] Barcelona city beach cams (found 2026-11-22): `https://www.barcelona.cat/sites/default/files/clabsa/camaraN.jpg`,
+  N = 1-6, shown on barcelona.cat "Banys i platges": 1 + 2 Somorrostro (1 looks SW over
+  Barceloneta), 3 + 4 Port Olímpic, 5 Nova Icària, 6 Bogatell. 1624x1234 or 2452x2056, people on
+  the sand visible; daylight only (all last updated 16:22 UTC that day). **Not used yet**: the
+  barcelona.cat legal notice says images have no general reuse permission and, with no licence
+  stated (none is), all rights are reserved and any use needs the Ajuntament's prior
+  authorisation. A plain link to the page is fine. Storing frames for training or showing them
+  in the app needs written permission first. If granted: fixed-URL cam source, crop + shrink
+  (Pillow, Actions only, needs OK) because frames are 0.5-1.3 MB.
+- Castelldefels YouTube live stream (Escola Garbí sailing school, "17 Nudos" channel,
+  `oe5GPi_C7Go`, 1280x720, live): fine to embed with YouTube's player (youtube-nocookie) in the
+  app; grabbing frames would break YouTube's terms. Not built yet.
 - [ ] Before printing posters: pick the main address (see open items) and fill `CONTACT` in
   `PrivacyPage.tsx`.
 - [x] Step 23 (2026-11-22): laptop footprint check (nothing deleted).
@@ -766,6 +1022,17 @@ Garraf not recommended: no cam, no coastal wind station), zone 2 Barcelona.
     y/N before deleting; `-DryRun` only lists; `-GlobalCaches` adds the pip + npm caches. Never
     touches code, `.env`, `my_old_data`, `web/share-kit`, `.git`. Tested: dry run and "n" delete
     nothing.
+- [ ] Not yet in line with the Principles (added 2026-11-23), nothing changed yet:
+  - "Surfers today" shows the **last 5 comments one by one** with their score and time, and the
+    average from the first report (`spot_reports_today`, `TodayReports.tsx`): should be a median,
+    hidden below 3 reports, with no individual ratings or comments.
+  - No trust score per device and no weighting of ratings by agreement with buoy/wind
+    (`train.py` weights only by source / `near_beach`).
+  - No private ratings (every community rating feeds the public summaries).
+  - No spot-removal request form (and `CONTACT` in `PrivacyPage.tsx` is empty).
+  - No surf etiquette / local rules section on spot pages.
+  - No crowd forecast by hour yet (the list only shows today's reported crowd).
+  - Surf alerts are already personal and opt-in; the 5 spots are all well-known public spots.
 - [ ] Open items:
   - **Pick the main address**: `SITE_URL` (QR poster, `/rate` link, canonical, `og:url`,
     `og:image`) is `surfwithai.vercel.app`, which only 307-redirects to the production address
@@ -792,8 +1059,8 @@ Garraf not recommended: no cam, no coastal wind station), zone 2 Barcelona.
   - Bump `web/package.json` version on releases: it's the `app_version` stored with ratings
     (the service worker cache updates on its own from file hashes).
   - No automated tests and no ESLint config in `web/` (type-check only: `npx tsc -b`).
-  - **First scheduled "Hourly collect" run seen 2026-11-22 20:44 UTC** (success, 0.7 min; GitHub
-    starts schedules late, not at :17). Nightly not seen yet. Earlier note, kept for reference:
+  - **Scheduled runs happen, but rarely**: ~3 "hourly" runs a day and the nightly ~10 h late (see
+    the review of steps 28-31). Earlier note, kept for reference:
     scheduled runs were never seen (checked 18:19 UTC on 2026-11-22, after the 0.4.0 push
     changed `collect.yml`): only manual runs in Actions, for both workflows. Without them there
     is no hourly data, no predictions and **no surf alerts**. Next: Actions > Hourly collect >

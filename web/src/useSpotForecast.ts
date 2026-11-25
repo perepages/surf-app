@@ -24,12 +24,18 @@ const DAY_S = 24 * 3600
 
 // Reusing the same object when nothing changed lets memoised sections skip re-rendering.
 const sameSpot = (a: Spot, b: Spot) =>
-  a.id === b.id && a.name === b.name && a.lat === b.lat && a.lon === b.lon && a.beachOrientation === b.beachOrientation
+  a.id === b.id &&
+  a.name === b.name &&
+  a.lat === b.lat &&
+  a.lon === b.lon &&
+  a.beachOrientation === b.beachOrientation &&
+  a.swellWindowMin === b.swellWindowMin &&
+  a.swellWindowMax === b.swellWindowMax
 function sameAi(a: Map<number, AiPrediction>, b: Map<number, AiPrediction>) {
   if (a.size !== b.size) return false
   for (const [k, v] of a) {
     const w = b.get(k)
-    if (!w || w.aiScore !== v.aiScore || w.reason !== v.reason || w.modelVersion !== v.modelVersion) return false
+    if (!w || w.aiScore !== v.aiScore || w.aiWaves !== v.aiWaves || w.aiShape !== v.aiShape || w.reason !== v.reason || w.modelVersion !== v.modelVersion) return false
   }
   return true
 }
