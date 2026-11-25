@@ -983,6 +983,9 @@ Money
     not ratings (the live models train on ratings: 3 so far).
   - Not done (ideas): calibrate `WAVES_STEPS` for Open-Meteo's low bias (the AI does it per spot
     once trained); check window edges with ratings/cam.
+- [x] Steps 32-38 committed 2026-11-25 on `test-preview` (c931a9a, secret scan clean), **not
+  pushed, not on `main`**. Migrations 15-19 are already applied, so pushing to `main` is safe for
+  the jobs; bump `web/package.json` to 0.5.0 in the release commit.
 - [ ] Barcelona city beach cams (found 2026-11-22): `https://www.barcelona.cat/sites/default/files/clabsa/camaraN.jpg`,
   N = 1-6, shown on barcelona.cat "Banys i platges": 1 + 2 Somorrostro (1 looks SW over
   Barceloneta), 3 + 4 Port Olímpic, 5 Nova Icària, 6 Bogatell. 1624x1234 or 2452x2056, people on
