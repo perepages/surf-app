@@ -97,9 +97,9 @@ export function TopBar({ current }: { current: string | null }) {
   return (
     <header className="flex flex-col gap-3 lg:flex-row lg:items-center lg:gap-10">
       <div className="flex items-center justify-between gap-3">
-        <a href="/" onClick={linkClick} className="flex items-center gap-2 text-foam" aria-label={t.allSpots}>
+        <a href="/" onClick={linkClick} className="flex min-w-0 shrink items-center gap-2 text-foam" aria-label={t.allSpots}>
           {current && <IconBack size={16} className="text-mist lg:hidden" />}
-          <Logo className="h-7 w-auto" />
+          <Logo className="h-7 w-auto max-w-full min-w-0" />
         </a>
         <div className="flex items-center gap-1 lg:hidden">
           <LangToggle lang={lang} setLang={setLang} />

@@ -1203,7 +1203,33 @@ Money
 - [x] **Released 2026-11-26 as app 0.7.0** (steps 42-49: forecast files instead of Open-Meteo in
   the browser, 3-hourly job via Supabase, 90-day forecast pruning, WebP cams kept 7 days, per-IP
   rating limit, /admin "Free plan" panel + nightly 80% alert, model pruning, 15-min CDN).
-  Migrations 20-24 were applied before the push.
+  Migrations 20-24 were applied before the push. Checked live: new bundle served (prefetch =
+  `/api/forecast`, no Open-Meteo in the bundle), `/api/forecast` 200 with CDN HIT on repeat,
+  bad URL 400, unknown spot 404; first collect run on the new code (dispatched 21:45 UTC) green
+  in every step: files republished, `is_day` + 95 sun-time rows stored, 50.3 Open-Meteo calls
+  logged.
+- [x] Step 50 (2026-11-26, asked for before going to sleep): weather under every hour, released
+  as **app 0.7.1** (pushed to `main` without a final look from me, as asked).
+  - `lib/weather.ts` `skyOf(hour)` -> clear / partly / cloudy / fog / drizzle / rain / snow /
+    storm from the WMO code + rain (storm = code 95/96/99 or CAPE >= 1000 with rain, same rule as
+    the physics thunder warning; >= 0.5 mm = rain, > 0 = drizzle); `daySky()` = worst daylight
+    hour + highest rain chance. `spot/WeatherIcon.tsx`: inline SVG icons on the Icons.tsx grid
+    (no emoji, no package; sun accent, rain foam, storm coral, moon at night).
+  - "Hour by hour": a row under the hour labels with the icon and the rain chance when >= 20%
+    (`SHOW_RAIN_FROM`); key line "Rain chance, %"; each bar's screen-reader label adds the sky +
+    rain chance. "Next days": the day's sky icon + top rain chance %. Words in EN/CA/ES
+    (`t.sky`, `t.rainChance`, `t.rainKey`).
+  - Also fixed: on a 375 px phone the top bar (logo + CA/ES/EN + settings) made the page 7 px
+    wider than the screen since step 40 (logo can now shrink).
+  - Checked in the dev app at 375 and 1280 px with every sky faked in that browser's saved
+    forecast (removed afterwards): icons, rain %, labels, Next days, no sideways scroll. `tsc`,
+    lint, parity 400/400, build, `npm run measure` (Edge: service worker, offline, installable)
+    pass. Not checked on a real phone.
+  - **Fix 2 deliberately not built** (AI scores + reports through Vercel): as separate requests
+    it adds ~2.5 Vercel requests per visit and lowers the Vercel ceiling from ~4,650 to ~3,200
+    daily users; it only pays off if Supabase counts egress uncompressed (then its ceiling is
+    ~900). The cheap way is to merge them into the `/api/forecast` answer (no extra requests,
+    CDN 10 min), a bigger change to how the app loads data: to decide with me.
 - [ ] Barcelona city beach cams (found 2026-11-22): `https://www.barcelona.cat/sites/default/files/clabsa/camaraN.jpg`,
   N = 1-6, shown on barcelona.cat "Banys i platges": 1 + 2 Somorrostro (1 looks SW over
   Barceloneta), 3 + 4 Port Olímpic, 5 Nova Icària, 6 Bogatell. 1624x1234 or 2452x2056, people on

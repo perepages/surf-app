@@ -26,6 +26,8 @@ import { IconArrow, IconBell, IconCheck, IconCross, IconDash, IconStar, IconWarn
 import { designFor, type SpotDesign } from './spotDesign'
 import { useLang, windName, type Lang, type Strings } from './strings'
 import { BAR_BG, HeroPhoto, kmhToKn, Pips, REL_STROKE, REL_TAG, REL_TEXT, splitName, TopBar, VERDICT_TEXT, wd } from './ui'
+import { daySky, SHOW_RAIN_FROM, skyOf } from '../lib/weather'
+import { WeatherIcon } from './WeatherIcon'
 
 const RateSheet = lazy(() => import('../components/RateSheet').then((m) => ({ default: m.RateSheet })))
 const AlertSheet = lazy(() => import('../components/AlertSheet').then((m) => ({ default: m.AlertSheet })))
@@ -661,6 +663,14 @@ function MiniRose(p: { t: Strings; facing: number; window: { from: number; to: n
 
 // ---------------------------------------------------------------- hour by hour
 
+/** ", Rain, 60% chance of rain" for an hour's screen-reader label ("" if unknown). */
+function skyLabel(t: Strings, h: HourConditions): string {
+  const sky = skyOf(h)
+  if (!sky) return ''
+  const chance = h.precipProb != null && h.precipProb >= SHOW_RAIN_FROM ? `, ${t.rainChance(h.precipProb)}` : ''
+  return `, ${t.sky[sky]}${chance}`
+}
+
 function HourByHour(p: {
   className: string
   t: Strings
@@ -740,7 +750,7 @@ function HourByHour(p: {
                   type="button"
                   onClick={() => p.onPick(h.time)}
                   aria-pressed={sel}
-                  aria-label={`${hhmm(h.time, tz)}: ${v} / 5, ${t.scale[v]}${h.isDay ? '' : `, ${t.night}`}`}
+                  aria-label={`${hhmm(h.time, tz)}: ${v} / 5, ${t.scale[v]}${h.isDay ? '' : `, ${t.night}`}${skyLabel(t, h)}`}
                   className={`relative flex items-start justify-center rounded-[4px] pt-1 font-mono text-[11px] font-medium sm:text-xs ${BAR_BG[v]} ${h.isDay ? '' : 'opacity-60'} ${sel ? 'outline-2 outline-offset-2 outline-foam' : ''}`}
                   style={{ height: `calc(var(--bar-base) + ${v} * var(--bar-step))` }}
                 >
@@ -759,6 +769,19 @@ function HourByHour(p: {
                 <span className="hidden sm:inline">{i % 2 === 0 || cols < 12 ? '' : hh(h.time, tz)}</span>
               </span>
             ))}
+          </div>
+          {/* Weather: icon + rain chance (from SHOW_RAIN_FROM %) under every hour */}
+          <div className="mt-1.5 grid gap-1 sm:gap-1.5" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }} aria-hidden>
+            {hours.map((h) => {
+              const sky = skyOf(h)
+              const chance = h.precipProb != null && h.precipProb >= SHOW_RAIN_FROM ? h.precipProb : null
+              return (
+                <span key={h.time} className="flex min-h-8 flex-col items-center gap-0.5" title={skyLabel(t, h).slice(2)}>
+                  {sky && <WeatherIcon sky={sky} night={!h.isDay} size={15} className="sm:size-[18px]" />}
+                  {chance != null && <span className="font-mono text-[9px] leading-none text-foam sm:text-[10px]">{chance}</span>}
+                </span>
+              )
+            })}
           </div>
           {/* Best window bracket + embat marker */}
           <div className="relative mt-2 h-10" style={{ display: 'grid', gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
@@ -790,6 +813,11 @@ function HourByHour(p: {
         <li className="flex items-center gap-1.5">
           <span className="night-hatch size-5 rounded-[4px] border border-line" />
           {t.night}
+        </li>
+        <li className="flex items-center gap-1.5">
+          <WeatherIcon sky="rain" size={16} />
+          <span className="font-mono text-[10px] text-foam">40</span>
+          {t.rainKey}
         </li>
       </ul>
     </section>
@@ -1048,6 +1076,18 @@ function NextDays({ className, t, days, scores, tz, onPick }: { className: strin
                 <span className="flex flex-1 flex-wrap items-center gap-x-3 gap-y-1">
                   <Pips value={run.best} />
                   <span className="text-sm font-semibold">{t.scale[run.best]}</span>
+                  {(() => {
+                    const { sky, rainChance } = daySky(daylight(d).filter((h) => h.isDay))
+                    if (!sky) return null
+                    const label = `${t.sky[sky]}${rainChance != null && rainChance >= SHOW_RAIN_FROM ? `, ${t.rainChance(rainChance)}` : ''}`
+                    return (
+                      <span className="flex items-center gap-1" title={label}>
+                        <WeatherIcon sky={sky} size={18} />
+                        {rainChance != null && rainChance >= SHOW_RAIN_FROM && <span className="font-mono text-xs text-foam">{rainChance}%</span>}
+                        <span className="sr-only">{label}</span>
+                      </span>
+                    )
+                  })()}
                 </span>
                 <span className="font-mono text-xs text-stone2">{when}</span>
               </button>
