@@ -5,7 +5,6 @@
 
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { ErrorBoundary, SectionFailed } from '../components/ErrorBoundary'
-import { splitName } from '../components/HomeScreen'
 import { useFavourites } from '../lib/favourites'
 import { dayOfMonth, hh, hhmm, localDate, num, tideCm } from '../lib/format'
 import { wavePower } from '../lib/conditions'
@@ -16,23 +15,21 @@ import { compass } from '../lib/geo'
 import { windRelation } from '../lib/geo'
 import type { ModelInfo } from '../lib/modelInfo'
 import type { ForecastDay, HourConditions } from '../lib/openMeteo'
-import { prefsSummary, usePrefs } from '../lib/prefs'
+import { usePrefs } from '../lib/prefs'
 import { readLocalAlerts, syncAlerts } from '../lib/push'
 import type { ReportsState } from '../lib/reports'
-import { linkClick, spotPath } from '../lib/route'
 import { fmt, seriesOf, windowFactor } from '../scoring/physics'
 import { resolveScore } from '../scoring/resolveScore'
 import type { Score, ScoreValue } from '../scoring/types'
 import type { useSpotForecast } from '../useSpotForecast'
-import { IconArrow, IconBack, IconBell, IconCheck, IconCross, IconDash, IconSliders, IconStar, IconWarn } from './Icons'
-import { Logo } from './Logo'
-import { SPOT_DESIGN, designFor, type SpotDesign } from './spotDesign'
-import { LANGS, useLang, windName, type Lang, type Strings } from './strings'
+import { IconArrow, IconBell, IconCheck, IconCross, IconDash, IconStar, IconWarn } from './Icons'
+import { designFor, type SpotDesign } from './spotDesign'
+import { useLang, windName, type Lang, type Strings } from './strings'
+import { BAR_BG, HeroPhoto, kmhToKn, Pips, REL_STROKE, REL_TAG, REL_TEXT, splitName, TopBar, VERDICT_TEXT, wd } from './ui'
 
 const RateSheet = lazy(() => import('../components/RateSheet').then((m) => ({ default: m.RateSheet })))
 const AlertSheet = lazy(() => import('../components/AlertSheet').then((m) => ({ default: m.AlertSheet })))
 const ForecastVsSurfers = lazy(() => import('../components/ForecastVsSurfers'))
-const PrefsSheet = lazy(() => import('../components/PrefsSheet').then((m) => ({ default: m.PrefsSheet })))
 
 type ReadyState = Extract<ReturnType<typeof useSpotForecast>['state'], { status: 'ready' }>
 type Scores = Map<number, Score>
@@ -55,9 +52,6 @@ const daylight = (day: ForecastDay) => {
 
 const scoreOf = (scores: Scores, h: HourConditions): ScoreValue => scores.get(h.time)?.value ?? 1
 const hourNum = (h: HourConditions, tz: string) => Number(hh(h.time, tz))
-/** Short weekday in the page language ("Fri" / "dv."). */
-const wd = (t: Strings, unix: number, tz: string) => new Intl.DateTimeFormat(t.locale, { weekday: 'short', timeZone: tz }).format(unix * 1000)
-const kmhToKn = (k: number) => Math.round(k / 1.852)
 /** Time the forecast is refetched (useSpotForecast refetches after 30 min). */
 const REFETCH_MIN = 30
 
@@ -73,7 +67,7 @@ function bestRun(hours: HourConditions[], scores: Scores) {
 
 export function SpotScreen(props: Props) {
   const { spot, forecast, stale, refreshing, ai, now, online, reports, model, onRatingSent, openRatingAtStart } = props
-  const [lang, t, setLang] = useLang()
+  const [lang, t] = useLang()
   const tz = forecast.timezone
   const design = designFor(spot.id)
   const facing = design?.facing ?? spot.beachOrientation
@@ -145,8 +139,6 @@ export function SpotScreen(props: Props) {
   }, [spot.id])
   const [alertOpen, setAlertOpen] = useState(false)
   const [alertLoaded, setAlertLoaded] = useState(false)
-  const [prefsOpen, setPrefsOpen] = useState(false)
-  const [prefsLoaded, setPrefsLoaded] = useState(false)
   const { ids: favIds, toggle } = useFavourites()
   const favourite = favIds.has(spot.id)
   const { town } = splitName(spot.name)
@@ -166,7 +158,7 @@ export function SpotScreen(props: Props) {
 
   return (
     <div className="mx-auto w-full max-w-[1280px] px-4 pt-4 sm:px-10 sm:pt-6">
-      <TopBar t={t} lang={lang} setLang={setLang} current={spot.id} onPrefs={() => { setPrefsLoaded(true); setPrefsOpen(true) }} prefsSet={!!prefsSummary(prefs)} />
+      <TopBar current={spot.id} />
 
       {(!online || (stale && !refreshing)) && (
         <p role="status" className="mt-4 border-l-2 border-accent pl-3 text-sm text-stone2">
@@ -294,13 +286,6 @@ export function SpotScreen(props: Props) {
           </Suspense>
         </ErrorBoundary>
       )}
-      {prefsLoaded && (
-        <ErrorBoundary name="Your surf" fallback={<SectionFailed what="your settings" />}>
-          <Suspense fallback={null}>
-            <PrefsSheet open={prefsOpen} onClose={() => setPrefsOpen(false)} />
-          </Suspense>
-        </ErrorBoundary>
-      )}
     </div>
   )
 }
@@ -328,148 +313,7 @@ function NearScreen({ className, children }: { className: string; children: Reac
   )
 }
 
-// ---------------------------------------------------------------- top bar + switcher
-
-function TopBar({
-  t,
-  lang,
-  setLang,
-  current,
-  onPrefs,
-  prefsSet,
-}: {
-  t: Strings
-  lang: Lang
-  setLang: (l: Lang) => void
-  current: string
-  onPrefs: () => void
-  prefsSet: boolean
-}) {
-  return (
-    <header className="flex flex-col gap-3 lg:flex-row lg:items-center lg:gap-10">
-      <div className="flex items-center justify-between gap-3">
-        <a href="/" onClick={linkClick} className="flex items-center gap-2 text-foam" aria-label={t.allSpots}>
-          <IconBack size={16} className="text-mist lg:hidden" />
-          <Logo className="h-7 w-auto" />
-        </a>
-        <div className="flex items-center gap-1 lg:hidden">
-          <LangToggle lang={lang} setLang={setLang} />
-          <IconButton label={t.yourSurf} onClick={onPrefs} active={prefsSet}>
-            <IconSliders />
-          </IconButton>
-        </div>
-      </div>
-      <nav aria-label={t.spots} className="-mx-4 overflow-x-auto px-4 lg:mx-0 lg:flex-1 lg:px-0">
-        <ul className="flex min-w-max gap-5 border-b border-line text-sm font-medium lg:gap-7">
-          {SPOT_DESIGN.map((s) => {
-            const on = s.slug === current
-            return (
-              <li key={s.slug}>
-                <a
-                  href={spotPath(s.slug)}
-                  onClick={linkClick}
-                  aria-current={on ? 'page' : undefined}
-                  className={`-mb-px flex min-h-11 items-center border-b-2 ${on ? 'border-accent text-foam' : 'border-transparent text-mist hover:text-foam'}`}
-                >
-                  {s.name}
-                </a>
-              </li>
-            )
-          })}
-        </ul>
-      </nav>
-      <div className="hidden items-center gap-2 lg:flex">
-        <LangToggle lang={lang} setLang={setLang} />
-        <button
-          type="button"
-          onClick={onPrefs}
-          aria-haspopup="dialog"
-          className={`flex h-10 items-center gap-2 rounded-[8px] border border-line px-3 text-sm font-medium hover:border-mist ${prefsSet ? 'text-accent' : 'text-stone2'}`}
-        >
-          <IconSliders size={16} /> {t.yourSurf}
-        </button>
-      </div>
-    </header>
-  )
-}
-
-const STRINGS_LANGUAGE: Record<Lang, string> = { en: 'Language', ca: 'Idioma', es: 'Idioma' }
-
-function LangToggle({ lang, setLang }: { lang: Lang; setLang: (l: Lang) => void }) {
-  return (
-    <div className="flex rounded-[8px] border border-line p-0.5 font-mono text-xs" role="group" aria-label={STRINGS_LANGUAGE[lang]}>
-      {LANGS.map((l) => (
-        <button
-          key={l}
-          type="button"
-          aria-pressed={lang === l}
-          onClick={() => setLang(l)}
-          className={`h-9 min-w-9 rounded-[6px] px-2 uppercase ${lang === l ? 'bg-foam text-abyss' : 'text-mist hover:text-foam'}`}
-        >
-          {l}
-        </button>
-      ))}
-    </div>
-  )
-}
-
-function IconButton({ label, onClick, active, children }: { label: string; onClick: () => void; active?: boolean; children: React.ReactNode }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={label}
-      className={`grid size-11 place-items-center rounded-[8px] border border-line hover:border-mist ${active ? 'text-accent' : 'text-stone2'}`}
-    >
-      {children}
-    </button>
-  )
-}
-
 // ---------------------------------------------------------------- hero
-
-/** Verdict colour: 1 coral (skip), 2 sand (maybe), 3-4 green (go), 5 purple (epic). */
-const VERDICT_TEXT: Record<number, string> = { 1: 'text-coral-text', 2: 'text-sand', 3: 'text-glass', 4: 'text-glass', 5: 'text-epic-soft' }
-const SCORE_FILL: Record<number, string> = { 1: 'border-s1 bg-s1', 2: 'border-s2 bg-s2', 3: 'border-s3 bg-s3', 4: 'border-s4 bg-s4', 5: 'border-s5 bg-s5' }
-
-function Pips({ value, size = 10 }: { value: number; size?: number }) {
-  return (
-    <span className="flex gap-1.5" aria-hidden>
-      {[1, 2, 3, 4, 5].map((i) => (
-        <span
-          key={i}
-          className={`rounded-full border ${i <= value ? SCORE_FILL[value] : 'border-[#4b8392]'}`}
-          style={{ width: size, height: size }}
-        />
-      ))}
-    </span>
-  )
-}
-
-function HeroPhoto({ src, slug, t }: { src: string | null; slug: string; t: Strings }) {
-  const [failed, setFailed] = useState(false)
-  useEffect(() => setFailed(false), [src])
-  if (!src || failed) {
-    // TODO: add web/public/photos/<slug>.jpg (and set `photo` in spot/spotDesign.ts).
-    return (
-      <div className="absolute inset-0 bg-inner" aria-hidden>
-        <span className="absolute right-4 bottom-3 font-mono text-[11px] text-mist/80">{t.photoTodo(slug)}</span>
-      </div>
-    )
-  }
-  return (
-    <div className="absolute inset-0 bg-sea" aria-hidden>
-      {/* Duotone: grey photo at low opacity over the deep-sea colour, so text keeps >= 4.5:1. */}
-      <img
-        src={src}
-        alt=""
-        onError={() => setFailed(true)}
-        className="absolute inset-0 size-full object-cover opacity-[0.26] mix-blend-luminosity grayscale"
-      />
-      <div className="absolute inset-0 bg-sea/40 lg:bg-sea/15" />
-    </div>
-  )
-}
 
 function Hero(p: {
   className: string
@@ -514,7 +358,7 @@ function Hero(p: {
   ]
   return (
     <section aria-label={p.name} className={`relative isolate overflow-hidden rounded-[10px] border border-line ${p.className}`}>
-      <HeroPhoto src={p.design?.photo ?? null} slug={p.slug} t={t} />
+      <HeroPhoto src={p.design?.photo ?? null} thumb={p.design?.thumb} slug={p.slug} t={t} />
       <div className="relative flex min-h-[460px] flex-col gap-5 p-5 sm:min-h-[520px] sm:p-10">
         <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
           <div>
@@ -585,10 +429,6 @@ function Hero(p: {
 }
 
 // ---------------------------------------------------------------- readings (waves, period, wind + rose, power, tide)
-
-const REL_TEXT: Record<string, string> = { offshore: 'text-glass', cross: 'text-sand', onshore: 'text-coral-text' }
-const REL_TAG: Record<string, string> = { offshore: 'bg-glass/15 text-glass', cross: 'bg-sand/15 text-sand', onshore: 'bg-coral/20 text-coral-text' }
-const REL_STROKE: Record<string, string> = { offshore: 'var(--pos)', cross: 'var(--accent)', onshore: 'var(--neg)' }
 
 function Readings(p: {
   className: string
@@ -668,7 +508,30 @@ function Readings(p: {
               </div>
               <MiniRose t={t} facing={facing} window={p.window} swell={dir} wind={hour.windDirection} rel={rel} />
             </dd>
-            <dd className="text-[12px] text-stone2">{t.windKey}</dd>
+            <dd>
+              <ul className="flex flex-wrap gap-x-4 gap-y-1.5 text-[12px] text-stone2" aria-label={t.keyTitle}>
+                <li className="flex items-center gap-1.5">
+                  <span className="h-[3px] w-4 rounded bg-foam" aria-hidden />
+                  {t.keySwell}
+                </li>
+                <li className="flex items-center gap-1.5">
+                  <span className="flex h-[5px] w-6 overflow-hidden rounded" aria-hidden>
+                    <span className="flex-1 bg-glass" />
+                    <span className="flex-1 bg-sand" />
+                    <span className="flex-1 bg-coral" />
+                  </span>
+                  {t.keyWind}
+                </li>
+                <li className="flex items-center gap-1.5">
+                  <span className="size-3 rounded-[2px] border border-foam/50 bg-foam/15" aria-hidden />
+                  {t.keyWindow}
+                </li>
+                <li className="flex items-center gap-1.5">
+                  <span className="w-4 border-t border-dashed border-mist" aria-hidden />
+                  {t.keyFacing}
+                </li>
+              </ul>
+            </dd>
             {!p.confirmed && (
               <dd className="flex items-center gap-1.5 font-mono text-[10px] text-mist">
                 <IconWarn size={12} /> {t.roseToConfirm}
@@ -788,8 +651,6 @@ function MiniRose(p: { t: Strings; facing: number; window: { from: number; to: n
 }
 
 // ---------------------------------------------------------------- hour by hour
-
-const BAR_BG: Record<number, string> = { 1: 'bg-s1 text-abyss', 2: 'bg-s2 text-abyss', 3: 'bg-s3 text-abyss', 4: 'bg-s4 text-abyss', 5: 'bg-s5 text-white' }
 
 function HourByHour(p: {
   className: string

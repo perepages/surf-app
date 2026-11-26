@@ -1044,6 +1044,19 @@ Money
   - Checked in the dev app at 390 and 1280 px (all 5 spots, 3 languages, sheets opened, nothing
     sent); `tsc`, lint, build pass. Not checked on a real phone. White text on purple (score 5
     hour bar) is ~4.2:1.
+- [x] Step 41 (2026-11-26, released as app 0.6.1): home page (`/`, what opens at the bare
+  address) in the new design, `web/src/spot/HomePage.tsx` (old `HomeScreen`, `MiniWave`,
+  `PrefsButton` removed). Same top bar as the spot pages (`spot/ui.tsx`: logo, spots, CA/ES/EN,
+  Your surf). Hero "the coast now": best spot this hour (photo duotone, name sized to fit,
+  score, conditions; "Just as good" when 1-2 spots tie; "Flat coast." / "Dark on the coast."
+  otherwise) + open button. Spot cards, best first, favourites on top: colour photo strip
+  (`photos/thumbs/<slug>.jpg`, 640x480, 32-82 KB), score chip, word, waves/period, wind with
+  arrow + offshore/cross/onshore colour, next 4 hours as mini bars (from the list's existing
+  4-hour forecast; no new requests), crowd. List/map; map: short names, re-fits while the
+  layout settles, **no scroll-wheel zoom** (scrolling past it used to zoom out). Spot page:
+  "to confirm" note removed (`confirmed: true`, values = DB, confirmed step 32), colour key under
+  the wind drawing (white = swell, green/sand/red = wind, wedge = swell window, dashed = beach
+  faces). Hero photos use the thumb on phones (`srcset`). Checked at 390 + 1280 px.
 - [ ] Barcelona city beach cams (found 2026-11-22): `https://www.barcelona.cat/sites/default/files/clabsa/camaraN.jpg`,
   N = 1-6, shown on barcelona.cat "Banys i platges": 1 + 2 Somorrostro (1 looks SW over
   Barceloneta), 3 + 4 Port Olímpic, 5 Nova Icària, 6 Bogatell. 1624x1234 or 2452x2056, people on

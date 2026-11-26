@@ -133,22 +133,6 @@ body {
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 
-/* Spot list: the little wave scrolls one wavelength per loop (MiniWave.tsx). */
-@keyframes mini-wave {
-  to {
-    transform: translateX(var(--wave-len, -24px));
-  }
-}
-.mini-wave {
-  animation: mini-wave linear infinite;
-  will-change: transform;
-}
-@media (prefers-reduced-motion: reduce) {
-  .mini-wave {
-    animation: none;
-  }
-}
-
 /* Map labels (SpotMap.tsx): dark like the cards instead of Leaflet's white tooltip. */
 .leaflet-tooltip.spot-tip {
   background: var(--color-abyss);

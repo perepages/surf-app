@@ -3,8 +3,10 @@
 // swell_window_min/max). The values below only drive what the new design DRAWS (wind rose,
 // hero photo, names). They are copied from the database on 2026-11-26.
 //
-// TO CONFIRM for every spot: `facing` and `swellWindow` (marked `confirmed: false`).
-// Photo: web/public/photos/<slug>.jpg, 1600x1200, no EXIF (made from the originals in designs/).
+// `facing` and `swellWindow` match the database values I confirmed on 2026-11-25 (step 32).
+// `confirmed: false` shows a "to confirm" note under the wind drawing.
+// Photo: web/public/photos/<slug>.jpg, 1600x1200, + thumbs/<slug>.jpg 640x480, no EXIF (made from
+// the originals in designs/).
 // Use a NEW file name when replacing a photo: phones keep the old one cached otherwise.
 // Missing file = flat block with a TODO.
 
@@ -23,6 +25,8 @@ export interface SpotDesign {
   confirmed: boolean
   /** Path under web/public. null = no photo yet. */
   photo: string | null
+  /** 640x480 copy for phones and the home page cards. */
+  thumb?: string | null
   /** Where the photo came from (shown nowhere; for you). */
   photoNote?: string
 }
@@ -35,8 +39,9 @@ export const SPOT_DESIGN: SpotDesign[] = [
     beach: 'Platja de Ribes Roges',
     facing: 165,
     swellWindow: { from: 105, to: 240 },
-    confirmed: false,
+    confirmed: true,
     photo: '/photos/vilanova.jpg',
+    thumb: '/photos/thumbs/vilanova.jpg',
     photoNote: 'designs/vilanovaimg.jpg',
   },
   {
@@ -46,8 +51,9 @@ export const SPOT_DESIGN: SpotDesign[] = [
     beach: 'Platja de Sitges',
     facing: 170,
     swellWindow: { from: 100, to: 240 },
-    confirmed: false,
+    confirmed: true,
     photo: '/photos/sitges.jpg',
+    thumb: '/photos/thumbs/sitges.jpg',
     photoNote: 'designs/garrafimg.jpg (Garraf village and marina, used for Sitges)',
   },
   {
@@ -57,8 +63,9 @@ export const SPOT_DESIGN: SpotDesign[] = [
     beach: 'Platja de Castelldefels',
     facing: 180,
     swellWindow: { from: 90, to: 250 },
-    confirmed: false,
+    confirmed: true,
     photo: '/photos/castelldefels.jpg',
+    thumb: '/photos/thumbs/castelldefels.jpg',
     photoNote: 'designs/castelldefels.jpg',
   },
   {
@@ -68,8 +75,9 @@ export const SPOT_DESIGN: SpotDesign[] = [
     beach: 'Platja de la Barceloneta',
     facing: 135,
     swellWindow: { from: 55, to: 190 },
-    confirmed: false,
+    confirmed: true,
     photo: '/photos/barceloneta.jpg',
+    thumb: '/photos/thumbs/barceloneta.jpg',
     photoNote: 'designs/bcnimg.jpg',
   },
   {
@@ -79,8 +87,9 @@ export const SPOT_DESIGN: SpotDesign[] = [
     beach: 'Platja del Bogatell',
     facing: 135,
     swellWindow: { from: 55, to: 200 },
-    confirmed: false,
+    confirmed: true,
     photo: '/photos/bogatell.jpg',
+    thumb: '/photos/thumbs/bogatell.jpg',
     photoNote: 'designs/bogatellimg.jpg',
   },
 ]

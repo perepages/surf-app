@@ -1,12 +1,12 @@
 import { LazyMotion, MotionConfig } from 'framer-motion'
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import { ErrorBoundary, SectionFailed } from './components/ErrorBoundary'
-import { HomeScreen } from './components/HomeScreen'
 import { useModelInfo } from './lib/modelInfo'
 import { useReports } from './lib/reports'
 import { linkClick, spotPath, useRoute } from './lib/route'
 import { DEFAULT_SPOT_ID } from './lib/spot'
 import { useSpotList } from './lib/spotList'
+import { HomePage } from './spot/HomePage'
 import { IconBack } from './spot/Icons'
 import { SpotScreen } from './spot/SpotScreen'
 import { useLang } from './spot/strings'
@@ -45,7 +45,7 @@ export default function App() {
   const now = useNow()
   const online = useOnline()
   const showPrivacy = useHash() === '#privacy'
-  const wide = route.name === 'spot' && !showPrivacy
+  const wide = !showPrivacy
 
   return (
     // reducedMotion="user": Framer skips transform/layout animations when the OS asks for less motion.
@@ -82,10 +82,7 @@ export default function App() {
 
 function Home({ now, online }: { now: number; online: boolean }) {
   const { state, retry } = useSpotList()
-  useEffect(() => {
-    document.title = 'Surf right now'
-  }, [])
-  return <HomeScreen state={state} retry={retry} now={now} online={online} />
+  return <HomePage state={state} retry={retry} now={now} online={online} />
 }
 
 function BackLink({ label }: { label: string }) {

@@ -6,7 +6,9 @@ import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { useEffect, useRef } from 'react'
 import { SCORE_WORD } from './ScoreChip'
-import { splitName, type RankedSpot } from './HomeScreen'
+import type { RankedSpot } from '../spot/HomePage'
+import { splitName } from '../spot/ui'
+import { designFor } from '../spot/spotDesign'
 import { navigate, spotPath } from '../lib/route'
 
 const COLOUR = ['', 'var(--color-s1)', 'var(--color-s2)', 'var(--color-s3)', 'var(--color-s4)', 'var(--color-s5)']
@@ -22,26 +24,38 @@ function markerIcon(s: RankedSpot): L.DivIcon {
     iconSize: [36, 36],
     iconAnchor: [18, 18],
     tooltipAnchor: [0, -20],
-    html: `<span style="display:grid;place-items:center;width:36px;height:36px;border-radius:12px;background:${bg};color:${fg};border:3px solid ${ring};font:900 20px/1 var(--font-display);box-shadow:0 2px 8px rgba(0,0,0,.45)">${v ?? '–'}</span>`,
+    html: `<span style="display:grid;place-items:center;width:36px;height:36px;border-radius:8px;background:${bg};color:${fg};border:3px solid ${ring};font:900 20px/1 var(--font-display);box-shadow:0 1px 3px rgba(0,0,0,.35)">${v ?? '–'}</span>`,
   })
 }
 
-export default function SpotMap({ spots }: { spots: RankedSpot[] }) {
+export default function SpotMap({ spots, label = 'Map of surf spots. Tap a spot to open it.' }: { spots: RankedSpot[]; label?: string }) {
   const box = useRef<HTMLDivElement>(null)
   const map = useRef<L.Map | null>(null)
   const layer = useRef<L.LayerGroup | null>(null)
   const fitted = useRef(false)
+  /** Puts every spot in view (set once the spots are known). */
+  const fitAll = useRef<(() => void) | null>(null)
 
   useEffect(() => {
     if (!box.current) return
-    const m = L.map(box.current, { zoomControl: true, attributionControl: true })
+    // No wheel zoom: scrolling the page past the map must not zoom it (buttons and pinch still do).
+    const m = L.map(box.current, { zoomControl: true, attributionControl: true, scrollWheelZoom: false })
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 18,
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors',
     }).addTo(m)
     map.current = m
     layer.current = L.layerGroup().addTo(m)
+    // Leaflet measures its box once; re-measure when the layout settles or the window changes,
+    // and re-fit the spots while the page is still settling (not after the user has moved).
+    const born = Date.now()
+    const ro = new ResizeObserver(() => {
+      m.invalidateSize()
+      if (Date.now() - born < 2000) fitAll.current?.()
+    })
+    ro.observe(box.current)
     return () => {
+      ro.disconnect()
       m.remove()
       map.current = null
       fitted.current = false
@@ -54,7 +68,7 @@ export default function SpotMap({ spots }: { spots: RankedSpot[] }) {
     if (!m || !group) return
     group.clearLayers()
     for (const s of spots) {
-      const { town } = splitName(s.spot.name)
+      const town = designFor(s.spot.id)?.name ?? splitName(s.spot.name).town
       const v = s.score?.value
       const word = v ? SCORE_WORD[v].word : 'no data'
       const marker = L.marker([s.spot.lat, s.spot.lon], {
@@ -75,14 +89,19 @@ export default function SpotMap({ spots }: { spots: RankedSpot[] }) {
     }
     if (!fitted.current && spots.length) {
       fitted.current = true
-      if (spots.length === 1) m.setView([spots[0].spot.lat, spots[0].spot.lon], 11)
-      else m.fitBounds(L.latLngBounds(spots.map((s) => [s.spot.lat, s.spot.lon])), { padding: [48, 48], maxZoom: 12 })
+      const fit = () => {
+        m.invalidateSize()
+        if (spots.length === 1) m.setView([spots[0].spot.lat, spots[0].spot.lon], 11, { animate: false })
+        else m.fitBounds(L.latLngBounds(spots.map((s) => [s.spot.lat, s.spot.lon])), { padding: [48, 48], maxZoom: 12, animate: false })
+      }
+      fitAll.current = fit
+      fit()
     }
   }, [spots])
 
   return (
-    <div className="mx-4 overflow-hidden rounded-3xl border border-line sm:mx-8">
-      <div ref={box} className="h-[62dvh] min-h-80 w-full bg-deep" role="region" aria-label="Map of surf spots. Tap a spot to open it." />
+    <div className="overflow-hidden rounded-[10px] border border-line">
+      <div ref={box} className="h-[62dvh] min-h-80 w-full bg-deep" role="region" aria-label={label} />
     </div>
   )
 }
