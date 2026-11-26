@@ -5,6 +5,7 @@ import { AnimatePresence, m } from 'framer-motion'
 import { useEffect, useRef } from 'react'
 import { MAX_WAVE_CHOICES, usePrefs } from '../lib/prefs'
 import { LEVEL_MAX_M, type Level } from '../scoring/physics'
+import { useLang, type Strings } from '../spot/strings'
 
 interface Props {
   open: boolean
@@ -15,11 +16,11 @@ export function PrefsSheet(props: Props) {
   return <AnimatePresence>{props.open && <Sheet {...props} />}</AnimatePresence>
 }
 
-const LEVELS: { id: Level | null; name: string; note: string }[] = [
-  { id: null, name: 'Not set', note: 'no size limit' },
-  { id: 'beginner', name: 'Beginner', note: `limit ${LEVEL_MAX_M.beginner} m` },
-  { id: 'intermediate', name: 'Intermediate', note: `limit ${LEVEL_MAX_M.intermediate} m` },
-  { id: 'advanced', name: 'Advanced', note: 'no size limit' },
+const levels = (t: Strings['prefs']): { id: Level | null; name: string; note: string }[] => [
+  { id: null, name: t.levels.none, note: t.noLimit },
+  { id: 'beginner', name: t.levels.beginner, note: t.limit(LEVEL_MAX_M.beginner!) },
+  { id: 'intermediate', name: t.levels.intermediate, note: t.limit(LEVEL_MAX_M.intermediate!) },
+  { id: 'advanced', name: t.levels.advanced, note: t.noLimit },
 ]
 
 const choice = (on: boolean) =>
@@ -27,6 +28,8 @@ const choice = (on: boolean) =>
 
 function Sheet({ onClose }: Props) {
   const { prefs, update } = usePrefs()
+  const [, page] = useLang()
+  const t = page.prefs
   const heading = useRef<HTMLHeadingElement>(null)
   useEffect(() => {
     const opener = document.activeElement as HTMLElement | null
@@ -57,22 +60,22 @@ function Sheet({ onClose }: Props) {
       >
         <div className="flex items-center justify-between px-5 pt-4 pb-2 sm:px-8">
           <h2 id="prefs-title" ref={heading} tabIndex={-1} className="font-display text-3xl font-extrabold outline-none">
-            Your surf
+            {t.title}
           </h2>
           <button type="button" onClick={onClose} className="rounded-full px-3 py-1.5 font-semibold text-foam hover:bg-card">
-            Done
+            {t.done}
           </button>
         </div>
 
         <div className="flex flex-col gap-5 px-5 pt-1 pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:px-8">
           <p className="max-w-[46ch] text-sm text-mist">
-            These change GO / MAYBE / SKIP and the warnings for you, not the wave forecast. Saved on this phone only.
+            {t.intro}
           </p>
 
           <label className="flex cursor-pointer items-center justify-between gap-4 rounded-2xl border border-line px-4 py-3 has-focus-visible:outline-2 has-focus-visible:outline-glass">
             <span className="flex flex-col">
-              <span className="font-semibold">I don’t mind rain</span>
-              <span className="text-xs text-mist">Rain no longer lowers the score. Thunderstorms always do.</span>
+              <span className="font-semibold">{t.rain}</span>
+              <span className="text-xs text-mist">{t.rainNote}</span>
             </span>
             <input
               type="checkbox"
@@ -83,10 +86,10 @@ function Sheet({ onClose }: Props) {
           </label>
 
           <fieldset className="flex flex-col gap-2">
-            <legend className="mb-2 text-sm font-semibold">Your level</legend>
+            <legend className="mb-2 text-sm font-semibold">{t.level}</legend>
             <div className="grid grid-cols-2 gap-2">
-              {LEVELS.map((l) => (
-                <label key={l.name} className={choice((prefs.level ?? null) === l.id)}>
+              {levels(t).map((l) => (
+                <label key={String(l.id)} className={choice((prefs.level ?? null) === l.id)}>
                   <input type="radio" name="level" checked={(prefs.level ?? null) === l.id} onChange={() => update({ level: l.id })} className="sr-only" />
                   <span className="font-semibold">{l.name}</span>
                   <span className="text-xs text-mist">{l.note}</span>
@@ -96,16 +99,16 @@ function Sheet({ onClose }: Props) {
           </fieldset>
 
           <fieldset className="flex flex-col gap-2">
-            <legend className="mb-2 text-sm font-semibold">Biggest waves you want (breaking height)</legend>
+            <legend className="mb-2 text-sm font-semibold">{t.biggest}</legend>
             <div className="grid grid-cols-4 gap-2">
               {[null, ...MAX_WAVE_CHOICES].map((v) => (
                 <label key={String(v)} className={`${choice((prefs.maxWaveM ?? null) === v)} items-center`}>
                   <input type="radio" name="max-wave" checked={(prefs.maxWaveM ?? null) === v} onChange={() => update({ maxWaveM: v })} className="sr-only" />
-                  <span className="font-semibold tabular-nums">{v == null ? 'Any' : `${v} m`}</span>
+                  <span className="font-semibold tabular-nums">{v == null ? t.any : `${v} m`}</span>
                 </label>
               ))}
             </div>
-            <p className="text-xs text-mist">Above your limit (this or your level’s, whichever is smaller) the score drops to MAYBE, and to SKIP at 1.5× the limit. Waist ≈ 0.7 m, head high ≈ 1.6 m.</p>
+            <p className="text-xs text-mist">{t.maxNote}</p>
           </fieldset>
         </div>
       </m.div>

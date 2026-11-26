@@ -14,37 +14,104 @@
   font-display: swap;
 }
 
-/* Mediterranean sea: deep teal water (lighter than night), foam, and signal colours.
-   Score colours say what to do: SKIP coral, MAYBE sand, GO greens, EPIC purple. */
+/* The app's palette. Mediterranean teal water,
+   foam text, sand accent; scores say what to do: 1 coral SKIP, 2 sand MAYBE, 3-4 greens GO,
+   5 purple EPIC. The hero photos sit on the sea colour as a grey duotone. */
+:root {
+  --sea: #0d3d4c; /* page */
+  --card: #134b5c;
+  --inner: #072f3f;
+  --line: #1f5e70; /* hairlines */
+  --stone: #e6f2ee; /* text (foam) */
+  --stone-2: #cfe1e5;
+  --muted: #a9c8cf;
+  --accent: #f4c95d; /* sand */
+  --pos: #5fe3c0; /* glass green: good for surf */
+  --neg: #ff7a66; /* coral: bad for surf */
+  --neg-text: #ff9f8f;
+  --epic: #8b5cf6;
+  --epic-soft: #c4b5fd;
+  --s1: #ff7a66;
+  --s2: #f4c95d;
+  --s3: #3fa79a;
+  --s4: #5fe3c0;
+  --s5: #8b5cf6;
+
+  --font-ui: 'Familjen Grotesk', 'Helvetica Neue', Arial, sans-serif;
+}
+
+/* Type: the app's own self-hosted pair (condensed sporty display + grotesk UI) + a mono for
+   numbers. Swap here. */
 @theme {
-  --color-abyss: #031b26;
-  --color-deep: #072f3f;
-  --color-sea: #0d3d4c;
-  --color-card: #134b5c;
-  --color-line: #1f5e70;
-  --color-kelp: #0f5257;
-  --color-foam: #e6f2ee;
-  --color-mist: #a9c8cf;
-  --color-glass: #5fe3c0;
-  --color-sand: #f4c95d;
-  --color-coral: #ff7a66;
-  --color-coral-text: #ff9f8f;
-  --color-epic: #8b5cf6;
-  --color-epic-soft: #c4b5fd;
-
-  /* Score scale 1-5: flat (skip), small (maybe), fun, good (go), epic */
-  --color-s1: #ff7a66;
-  --color-s2: #f4c95d;
-  --color-s3: #3fa79a;
-  --color-s4: #5fe3c0;
-  --color-s5: #8b5cf6;
-
   --font-display: 'Big Shoulders Display', 'Arial Narrow', Impact, sans-serif;
-  --font-sans: 'Familjen Grotesk', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, Menlo, monospace;
+  --font-sans: var(--font-ui);
+}
+
+@theme inline {
+  --color-abyss: #031b26;
+  --color-deep: var(--inner);
+  --color-sea: var(--sea);
+  --color-card: var(--card);
+  --color-line: var(--line);
+  --color-kelp: #0f5257;
+  --color-foam: var(--stone);
+  --color-stone2: var(--stone-2);
+  --color-mist: var(--muted);
+  --color-glass: var(--pos);
+  --color-sand: var(--accent);
+  --color-accent: var(--accent);
+  --color-coral: var(--neg);
+  --color-coral-text: var(--neg-text);
+  --color-epic: var(--epic);
+  --color-epic-soft: var(--epic-soft);
+
+  --color-s1: var(--s1);
+  --color-s2: var(--s2);
+  --color-s3: var(--s3);
+  --color-s4: var(--s4);
+  --color-s5: var(--s5);
 }
 
 :root {
   color-scheme: dark;
+}
+
+/* The display face has one weight: never fake a bold. */
+html {
+  font-synthesis-weight: none;
+}
+
+/* Grain: inline SVG noise over everything, 5%. */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 60;
+  opacity: 0.05;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 1 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+}
+
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Night hours in the hour-by-hour bars. */
+/* Hour-by-hour bar height = base + score x step. */
+#hours {
+  --bar-base: 20px;
+  --bar-step: 18px;
+}
+@media (min-width: 640px) {
+  #hours {
+    --bar-base: 26px;
+    --bar-step: 20px;
+  }
+}
+
+.night-hatch {
+  background-image: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.07) 0 6px, transparent 6px 12px);
 }
 
 html,
@@ -57,7 +124,7 @@ body {
 }
 
 :focus-visible {
-  outline: 2px solid var(--color-glass);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 

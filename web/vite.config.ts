@@ -50,7 +50,9 @@ function serviceWorker(): Plugin {
       }
       walk(root)
       // og.png is only fetched by link previews (WhatsApp etc.), never by the app itself.
-      const precache = files.filter((f) => f !== 'sw.js' && f !== 'og.png').sort()
+      // Spot hero photos (photos/, ~150-500 KB each) are cached when a spot is opened, not all
+      // on the first visit.
+      const precache = files.filter((f) => f !== 'sw.js' && f !== 'og.png' && !f.startsWith('photos/')).sort()
       const hash = createHash('sha256')
       for (const f of precache) hash.update(f).update(readFileSync(join(root, f)))
       const sw = readFileSync(new URL('./sw/sw.template.js', import.meta.url), 'utf8')

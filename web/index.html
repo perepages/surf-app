@@ -35,9 +35,11 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Surf" />
 
-    <!-- Fonts are self-hosted (public/fonts). -->
-    <!-- Only the headline font is preloaded; the body font swaps in, so it doesn't compete with the JavaScript. -->
+    <!-- Display + UI fonts are self-hosted (public/fonts); only the numbers font (IBM Plex Mono) comes from Google Fonts. -->
     <link rel="preload" href="/fonts/big-shoulders-display-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap" />
 
     <!-- Open the data connections while the JavaScript is still downloading. -->
     <link rel="preconnect" href="https://marine-api.open-meteo.com" crossorigin />

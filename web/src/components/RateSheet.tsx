@@ -17,11 +17,13 @@ import {
   type WaveSize,
   type WhenOption,
 } from '../lib/ratings'
-import { hhmm, localDate, weekday } from '../lib/format'
+import { hhmm, localDate } from '../lib/format'
 import { NEAR_BEACH_KM, checkNearBeach, type NearBeachResult } from '../lib/nearBeach'
 import type { Forecast } from '../lib/openMeteo'
 import type { Spot } from '../lib/spot'
-import { SCORE_LABELS, type Score, type ScoreValue } from '../scoring/types'
+import type { Score, ScoreValue } from '../scoring/types'
+import { IconCheck } from '../spot/Icons'
+import { useLang, weekdayIn, type Strings } from '../spot/strings'
 import { SCORE_CLASS } from './ScoreChip'
 
 const SCORE_BG = SCORE_CLASS as Record<number, string>
@@ -35,6 +37,8 @@ interface Props {
   now: number
   /** Called after a rating is saved (e.g. to refresh today's reports). */
   onSent?: () => void
+  /** 1-5 already picked on the page before the sheet opened (still editable). */
+  initialOverall?: ScoreValue | null
 }
 
 /**
@@ -47,14 +51,16 @@ export function RateSheet(props: Props) {
 
 type Status = { kind: 'editing' } | { kind: 'sending' } | { kind: 'error'; message: string } | { kind: 'done'; forecast: Score; said: ScoreValue }
 
-function Sheet({ onClose, spot, forecast, scores, now, onSent }: Props) {
+function Sheet({ onClose, spot, forecast, scores, now, onSent, initialOverall }: Props) {
+  const [, page] = useLang()
+  const t = page.rate
   // Options are fixed while the sheet is open, so a minute tick doesn't reshuffle them.
   const [openedAt] = useState(now)
   const options = useMemo(() => whenOptions(forecast, openedAt), [forecast, openedAt])
   const latest = [...options].filter((o) => o.available).sort((a, b) => b.surfedAt - a.surfedAt)[0]
 
   const [when, setWhen] = useState<WhenOption | undefined>(latest)
-  const [overall, setOverall] = useState<ScoreValue | null>(null)
+  const [overall, setOverall] = useState<ScoreValue | null>(initialOverall ?? null)
   const [waveSize, setWaveSize] = useState<WaveSize | null>(null)
   const [surface, setSurface] = useState<Surface | null>(null)
   const [weather, setWeather] = useState<WeatherAnswer | null>(null)
@@ -99,7 +105,7 @@ function Sheet({ onClose, spot, forecast, scores, now, onSent }: Props) {
       onSent?.()
     } catch (err) {
       if (err instanceof RatingError && err.kind === 'limit') setLimitUntil('unknown')
-      setStatus({ kind: 'error', message: err instanceof Error ? err.message : String(err) })
+      setStatus({ kind: 'error', message: errorText(t, err) })
     }
   }
 
@@ -125,35 +131,33 @@ function Sheet({ onClose, spot, forecast, scores, now, onSent }: Props) {
       >
         <div className="flex items-center justify-between px-5 pt-4 pb-2 sm:px-8">
           <h2 id="rate-title" ref={heading} tabIndex={-1} className="font-display text-3xl font-extrabold outline-none">
-            {status.kind === 'done' ? 'Thanks!' : 'How was it really?'}
+            {status.kind === 'done' ? t.thanks : t.title}
           </h2>
           <button type="button" onClick={onClose} className="rounded-full px-3 py-1.5 text-mist hover:text-foam">
-            Close
+            {t.close}
           </button>
         </div>
 
         {status.kind === 'done' ? (
-          <ThankYou forecast={status.forecast} said={status.said} onDone={onClose} />
+          <ThankYou t={t} forecast={status.forecast} said={status.said} onDone={onClose} />
         ) : limitUntil != null ? (
           <div className="px-5 pt-2 pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:px-8">
             <p className="max-w-[44ch] text-lg">
-              You’ve sent 3 ratings in the last 24 hours, which is the most one phone can send. Thanks!{' '}
-              {typeof limitUntil === 'number'
-                ? `You can rate again ${whenAgain(Math.ceil(limitUntil / 1000), openedAt, forecast.timezone)}.`
-                : 'You can rate again tomorrow.'}
+              {t.limit}{' '}
+              {typeof limitUntil === 'number' ? whenAgain(page, Math.ceil(limitUntil / 1000), openedAt, forecast.timezone) : t.againTomorrow}
             </p>
             <button type="button" onClick={onClose} className="mt-6 w-full rounded-2xl bg-foam py-3.5 font-display text-2xl font-extrabold text-abyss">
-              OK
+              {t.ok}
             </button>
           </div>
         ) : (
           <>
             <div className="flex-1 overflow-y-auto px-5 pb-4 sm:px-8">
-              <Group title="When">
+              <Group title={t.when}>
                 {(['today', 'yesterday'] as const).map((day) => (
                   <div key={day} className="mb-2.5">
-                    <span className="mb-1 block text-sm text-mist">{day === 'today' ? 'Today' : 'Yesterday'}</span>
-                    <div role="radiogroup" aria-label={day === 'today' ? 'Today' : 'Yesterday'} className="grid grid-cols-4 gap-1.5">
+                    <span className="mb-1 block text-sm text-mist">{day === 'today' ? t.today : t.yesterday}</span>
+                    <div role="radiogroup" aria-label={day === 'today' ? t.today : t.yesterday} className="grid grid-cols-4 gap-1.5">
                       {options
                         .filter((o) => o.day === day)
                         .map((o) => (
@@ -164,7 +168,7 @@ function Sheet({ onClose, spot, forecast, scores, now, onSent }: Props) {
                             onClick={() => setWhen(o)}
                             small
                           >
-                            {o.label}
+                            {t.slots[o.slot] ?? o.label}
                           </Chip>
                         ))}
                     </div>
@@ -172,42 +176,42 @@ function Sheet({ onClose, spot, forecast, scores, now, onSent }: Props) {
                 ))}
               </Group>
 
-              <Group title="Overall">
-                <div role="radiogroup" aria-label="Overall, 1 to 5" className="grid grid-cols-5 gap-1.5">
+              <Group title={t.overall}>
+                <div role="radiogroup" aria-label={t.overallAria} className="grid grid-cols-5 gap-1.5">
                   {([1, 2, 3, 4, 5] as const).map((v) => (
                     <button
                       key={v}
                       type="button"
                       role="radio"
                       aria-checked={overall === v}
-                      aria-label={`${v} ${SCORE_LABELS[v]}`}
+                      aria-label={`${v} ${page.scale[v]}`}
                       onClick={() => setOverall(v)}
                       className={`flex flex-col items-center rounded-xl py-2 transition-[transform,box-shadow] duration-150 ${SCORE_BG[v]} ${
                         overall === v ? 'scale-105 ring-2 ring-foam ring-offset-2 ring-offset-deep' : overall ? 'opacity-60' : ''
                       }`}
                     >
                       <span className="font-display text-4xl leading-none font-extrabold">{v}</span>
-                      <span className="text-xs font-semibold">{SCORE_LABELS[v]}</span>
+                      <span className="text-xs font-semibold">{page.scale[v]}</span>
                     </button>
                   ))}
                 </div>
               </Group>
 
-              <p className="mt-6 mb-1 text-sm text-mist">Optional, but it helps:</p>
-              <Group title="Wave size">
-                <Choices label="Wave size" items={WAVE_SIZES} value={waveSize} onChange={setWaveSize} cols="grid-cols-3 sm:grid-cols-6" />
+              <p className="mt-6 mb-1 text-sm text-mist">{t.optional}</p>
+              <Group title={t.waveSize}>
+                <Choices label={t.waveSize} names={t.sizes} items={WAVE_SIZES} value={waveSize} onChange={setWaveSize} cols="grid-cols-3 sm:grid-cols-6" />
               </Group>
-              <Group title="Surface">
-                <Choices label="Surface" items={SURFACES} value={surface} onChange={setSurface} cols="grid-cols-3" />
+              <Group title={t.surface}>
+                <Choices label={t.surface} names={t.surfaces} items={SURFACES} value={surface} onChange={setSurface} cols="grid-cols-3" />
               </Group>
-              <Group title="Was the weather the problem?">
-                <Choices label="Was the weather the problem?" items={WEATHER_ANSWERS} value={weather} onChange={setWeather} cols="grid-cols-[2fr_1fr]" />
-                <p className="mt-1.5 text-xs text-mist">So a rainy day with good waves isn’t learned as bad waves.</p>
+              <Group title={t.weatherQ}>
+                <Choices label={t.weatherQ} names={t.weatherAnswers} items={WEATHER_ANSWERS} value={weather} onChange={setWeather} cols="grid-cols-[2fr_1fr]" />
+                <p className="mt-1.5 text-xs text-mist">{t.weatherNote}</p>
               </Group>
-              <Group title="Crowd">
-                <Choices label="Crowd" items={CROWDS} value={crowd} onChange={setCrowd} cols="grid-cols-4" />
+              <Group title={t.crowd}>
+                <Choices label={t.crowd} names={t.crowds} items={CROWDS} value={crowd} onChange={setCrowd} cols="grid-cols-4" />
               </Group>
-              <Group title="At the beach?">
+              <Group title={t.atBeachQ}>
                 <div className="flex flex-wrap items-center gap-3">
                   <button
                     type="button"
@@ -215,28 +219,35 @@ function Sheet({ onClose, spot, forecast, scores, now, onSent }: Props) {
                     disabled={location === 'checking' || location === 'near'}
                     className="rounded-xl border border-kelp px-3 py-2.5 font-semibold hover:border-mist disabled:opacity-60"
                   >
-                    {location === 'checking' ? 'Checking…' : location === 'near' ? 'At the beach ✓' : 'Check on this phone'}
+                    {location === 'checking' ? (
+                      t.checking
+                    ) : location === 'near' ? (
+                      <span className="flex items-center gap-1.5">
+                        {t.atBeach} <IconCheck size={16} />
+                      </span>
+                    ) : (
+                      t.checkPhone
+                    )}
                   </button>
                   <p className="min-w-0 flex-1 text-sm text-mist" aria-live="polite">
-                    {location === 'near' && 'Your rating will say you were at the beach.'}
-                    {location === 'far' && `Not within ${NEAR_BEACH_KM} km right now. That’s fine, nothing is saved about it.`}
-                    {location === 'denied' && 'Location is blocked. That’s fine, nothing is saved about it.'}
-                    {location === 'unavailable' && 'Couldn’t get a location. That’s fine, nothing is saved about it.'}
-                    {(location == null || location === 'checking') &&
-                      `Ratings from the beach count more. Your phone checks if you’re within ${NEAR_BEACH_KM} km; your position never leaves it.`}
+                    {location === 'near' && t.near}
+                    {location === 'far' && t.far(NEAR_BEACH_KM)}
+                    {location === 'denied' && t.denied}
+                    {location === 'unavailable' && t.unavailable}
+                    {(location == null || location === 'checking') && t.locHelp(NEAR_BEACH_KM)}
                   </p>
                 </div>
               </Group>
-              <Group title="Comment">
+              <Group title={t.comment}>
                 <textarea
                   value={comment}
                   onChange={(e) => setComment(e.target.value.slice(0, COMMENT_MAX))}
                   rows={2}
-                  placeholder="Sandbar shifted, rip by the pier…"
+                  placeholder={t.commentPh}
                   className="w-full resize-none rounded-xl border border-kelp bg-abyss/60 px-3 py-2 placeholder:text-mist/60 focus:border-mist focus:outline-none"
                 />
                 <p className="flex justify-between text-xs text-mist">
-                  <span>Shown to others on today’s reports, without your name.</span>
+                  <span>{t.commentNote}</span>
                   <span className="tabular-nums">
                     {comment.length}/{COMMENT_MAX}
                   </span>
@@ -247,7 +258,7 @@ function Sheet({ onClose, spot, forecast, scores, now, onSent }: Props) {
             <div className="border-t border-kelp px-5 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-8">
               {clash ? (
                 <p role="alert" className="mb-2 text-sm text-coral">
-                  {clash}
+                  {t.clash}
                 </p>
               ) : (
                 status.kind === 'error' && (
@@ -262,12 +273,12 @@ function Sheet({ onClose, spot, forecast, scores, now, onSent }: Props) {
                 disabled={!canSend}
                 className="w-full rounded-2xl bg-glass py-3.5 font-display text-2xl font-extrabold text-abyss transition-opacity disabled:opacity-40"
               >
-                {status.kind === 'sending' ? 'Sending…' : overall == null ? 'Pick 1 to 5 to send' : 'Send rating'}
+                {status.kind === 'sending' ? t.sending : overall == null ? t.pick : t.send}
               </button>
               <p className="mt-2 text-center text-xs text-mist">
-                No account needed. Sent with an anonymous device id.{' '}
+                {t.noAccount}{' '}
                 <a href="#privacy" className="underline underline-offset-2 hover:text-foam">
-                  What we save
+                  {t.whatWeSave}
                 </a>
               </p>
             </div>
@@ -278,31 +289,44 @@ function Sheet({ onClose, spot, forecast, scores, now, onSent }: Props) {
   )
 }
 
-/** "at 19:00" today, "on Sat at 19:00" another day. */
-function whenAgain(unix: number, now: number, tz: string): string {
-  const time = `at ${hhmm(unix, tz)}`
-  return localDate(unix, tz) === localDate(now, tz) ? time : `on ${weekday(unix, tz)} ${time}`
+/** "You can rate again at 19:00" today, "… on Sat at 19:00" another day, in the page language. */
+function whenAgain(page: Strings, unix: number, now: number, tz: string): string {
+  const time = hhmm(unix, tz)
+  return localDate(unix, tz) === localDate(now, tz) ? page.rate.againAt(time) : page.rate.againOn(weekdayIn(page, unix, tz), time)
 }
 
-function ThankYou({ forecast, said, onDone }: { forecast: Score; said: ScoreValue; onDone: () => void }) {
+/** A rating error in the page language (the database's own message stays in the console). */
+function errorText(t: Strings['rate'], err: unknown): string {
+  if (err instanceof RatingError) {
+    if (err.kind === 'limit') return t.errLimit
+    if (err.kind === 'contradiction') return t.clash
+    if (err.kind === 'too_old') return t.errTooOld
+    if (err.message.includes('too slow')) return t.errSlow
+    if (err.message.includes('no forecast')) return t.errNoForecast
+  }
+  console.warn('Rating not saved', err)
+  return t.errOther
+}
+
+function ThankYou({ t, forecast, said, onDone }: { t: Strings['rate']; forecast: Score; said: ScoreValue; onDone: () => void }) {
   return (
     <div className="px-5 pt-2 pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:px-8">
       <div className="flex items-end gap-6">
-        <Big label={forecast.source === 'ai' ? 'AI forecast' : 'Forecast'} value={forecast.value} />
+        <Big label={forecast.source === 'ai' ? t.aiForecast : t.forecast} value={forecast.value} />
         <span className="pb-6 font-display text-4xl text-mist" aria-hidden>
-          vs
+          {t.vs}
         </span>
-        <Big label="You" value={said} />
+        <Big label={t.you} value={said} />
       </div>
       <p className="mt-5 max-w-[40ch] text-lg">
-        Forecast said {forecast.value}, you said {said} — thanks, this trains the AI.
+        {t.thanksLine(forecast.value, said)}
       </p>
       <button
         type="button"
         onClick={onDone}
         className="mt-6 w-full rounded-2xl bg-foam py-3.5 font-display text-2xl font-extrabold text-abyss"
       >
-        Done
+        {t.done}
       </button>
     </div>
   )
@@ -335,12 +359,15 @@ function Group({ title, children }: { title: string; children: ReactNode }) {
 
 function Choices<T extends string>({
   label,
+  names,
   items,
   value,
   onChange,
   cols,
 }: {
   label: string
+  /** Labels in the page language, by id (falls back to the English label). */
+  names: Record<string, string>
   items: readonly { id: T; label: string }[]
   value: T | null
   onChange: (v: T | null) => void
@@ -351,7 +378,7 @@ function Choices<T extends string>({
       {items.map((it) => (
         // Tapping the chosen chip again clears it (these answers are optional).
         <Chip key={it.id} selected={value === it.id} onClick={() => onChange(value === it.id ? null : it.id)}>
-          {it.label}
+          {names[it.id] ?? it.label}
         </Chip>
       ))}
     </div>
