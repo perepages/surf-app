@@ -48,6 +48,7 @@ Weather data by Open-Meteo.com (non-commercial use).
 from __future__ import annotations
 
 import argparse
+import atexit
 from http.client import HTTPException
 import json
 import sys
@@ -139,12 +140,69 @@ class HttpError(Exception):
         self.code = code
 
 
+# ---------- Open-Meteo usage counter (for /admin, migration 24) ----------
+# Every job asks Open-Meteo through http() below, so counting here covers them all. Weight =
+# Open-Meteo's published rule (open-meteo.com/en/pricing): one call per 10 variables x 2 weeks
+# x 1 location (x models), counted fractionally, never less than 1. Added to api_calls when the
+# job ends. Open-Meteo's free limit (10,000/day) is per IP address; our runs come from changing
+# GitHub machines, so this total is a worst case.
+
+_OM_USAGE = {"calls": 0.0, "requests": 0}
+
+
+def open_meteo_weight(url: str) -> float:
+    q = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+    one = lambda k: (q.get(k) or [""])[0]  # noqa: E731
+    variables = sum(len([v for v in one(k).split(",") if v])
+                    for k in ("hourly", "daily", "current", "minutely_15"))
+    if one("start_date") and one("end_date"):
+        days = (datetime.fromisoformat(one("end_date")) - datetime.fromisoformat(one("start_date"))).days + 1
+    elif one("forecast_hours") or one("past_hours"):
+        days = (int(one("forecast_hours") or 0) + int(one("past_hours") or 0)) / 24
+    else:
+        days = int(one("forecast_days") or 7) + int(one("past_days") or 0)
+    locations = len(one("latitude").split(",")) if one("latitude") else 1
+    models = len(one("models").split(",")) if one("models") else 1
+    return max(1.0, variables / 10) * max(1.0, days / 14) * locations * models
+
+
+def _count_open_meteo(url: str) -> None:
+    if "open-meteo.com" not in urllib.parse.urlsplit(url).netloc:
+        return
+    try:
+        weight = open_meteo_weight(url)
+    except (ValueError, TypeError):
+        weight = 1.0
+    if _OM_USAGE["requests"] == 0:
+        atexit.register(_flush_open_meteo)
+    _OM_USAGE["calls"] += weight
+    _OM_USAGE["requests"] += 1
+
+
+def _flush_open_meteo() -> None:
+    """Adds this job's Open-Meteo calls to today's api_calls row. Never fails the job."""
+    url, key = env("SUPABASE_URL"), env("SUPABASE_SERVICE_ROLE_KEY")
+    if not (url and key and _OM_USAGE["requests"]):
+        return
+    base = url.strip().rstrip("/")
+    base = base if base.startswith("http") else "https://" + base
+    try:
+        http(f"{base}/rest/v1/rpc/log_api_calls", supabase_headers(key), method="POST",
+             body={"p_service": "open-meteo", "p_calls": round(_OM_USAGE["calls"], 2),
+                   "p_requests": _OM_USAGE["requests"]})
+    except Exception as exc:  # e.g. migration 24 not applied yet
+        print(f"(Open-Meteo usage not recorded: {type(exc).__name__}: {str(exc)[:120]})")
+    _OM_USAGE.update(calls=0.0, requests=0)
+
+
 def http(url: str, headers: dict[str, str] | None = None, method: str = "GET",
          body: Any = None) -> Any:
     """Send a request, retrying transient failures; return decoded JSON (None if empty).
 
     `body` bytes are sent as they are (set Content-Type in `headers`); anything else as JSON.
+    Open-Meteo requests are counted for /admin (see _count_open_meteo).
     """
+    _count_open_meteo(url)
     headers = dict(headers or {})
     if isinstance(body, bytes):
         data = body

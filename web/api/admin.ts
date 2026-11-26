@@ -1,6 +1,7 @@
 // Admin API (Vercel function): POST /api/admin, JSON body with the password and an action:
 //   {"password":"...","action":"summary"}                      -> last 30 days of counts + latest 50 ratings
 //   {"password":"...","action":"hide","id":123,"hidden":true}  -> hide (or show again) one rating
+//   {"password":"...","action":"usage"}                        -> free-plan usage + 80% alerts
 // The password goes in the body, not a header: Vercel's preview protection may handle
 // `Authorization` headers itself, and headers can't carry characters like ñ or é.
 // (`Authorization: Bearer <password>` still works, for scripts.)
@@ -126,6 +127,64 @@ async function summary(db: ReturnType<typeof supabase>) {
   }
 }
 
+// ---------- free-plan usage (action "usage", migration 24) ----------
+
+/** Free-plan limits, checked 2026-11-26 on supabase.com/pricing, open-meteo.com/en/pricing and
+ *  vercel.com/docs/plans/hobby. Same numbers in jobs/usage_check.py (nightly email alert). */
+export const FREE_LIMITS = {
+  dbBytes: 500e6, // Supabase: 500 MB database (over it: requests answer HTTP 402)
+  storageBytes: 1e9, // Supabase: 1 GB file storage
+  openMeteoPerDay: 10_000, // Open-Meteo non-commercial: 10,000 calls/day (also 5,000/h, 600/min), per IP
+}
+/** Warn from this share of a limit. */
+export const ALERT_AT = 0.8
+
+interface UsageRow {
+  measured_at: string
+  db_bytes: number
+  tables: { name: string; bytes: number; rows_estimate: number }[]
+  storage: { bucket: string; files: number; bytes: number }[]
+  api_calls: { day: string; service: string; calls: number; requests: number }[]
+}
+
+async function usage(db: ReturnType<typeof supabase>) {
+  const u = await db.call<UsageRow>('rpc/usage_summary', { method: 'POST', body: '{}' })
+  const storageBytes = u.storage.reduce((s, b) => s + b.bytes, 0)
+  const today = isoDay(new Date())
+  const om = u.api_calls.filter((a) => a.service === 'open-meteo')
+  const omToday = om.find((a) => a.day === today)?.calls ?? 0
+  const omMax = om.reduce((m, a) => Math.max(m, a.calls), 0)
+  const metric = (key: string, label: string, used: number, limit: number, unit: 'bytes' | 'calls', note: string) => ({
+    key,
+    label,
+    used,
+    limit,
+    unit,
+    share: limit > 0 ? used / limit : 0,
+    alert: limit > 0 && used / limit >= ALERT_AT,
+    note,
+  })
+  return {
+    measuredAt: u.measured_at,
+    alertAt: ALERT_AT,
+    metrics: [
+      metric('db', 'Supabase database', u.db_bytes, FREE_LIMITS.dbBytes, 'bytes', 'Free: 500 MB. Measured now, same way as Supabase.'),
+      metric('storage', 'Supabase file storage', storageBytes, FREE_LIMITS.storageBytes, 'bytes', 'Free: 1 GB. All buckets.'),
+      metric('openMeteo', 'Open-Meteo calls today', omToday, FREE_LIMITS.openMeteoPerDay, 'calls',
+        `Free: 10,000 a day. Counted by our jobs with Open-Meteo’s weighting (UTC day). Busiest of the last 30 days: ${Math.round(omMax)}.`),
+    ],
+    tables: u.tables,
+    storage: u.storage,
+    apiDays: om.map(({ day, calls, requests }) => ({ day, calls, requests })),
+    // Shown as "check on the dashboard": no API gives these without a broad account token.
+    notReadable: [
+      { label: 'Supabase egress', limit: '5 GB + 5 GB cached a month', where: 'Supabase dashboard > Organization > Usage', url: 'https://supabase.com/dashboard/org/_/usage' },
+      { label: 'Vercel data transfer', limit: '100 GB a month (10 GB origin)', where: 'Vercel dashboard > Usage', url: 'https://vercel.com/dashboard' },
+      { label: 'Vercel requests + functions', limit: '1,000,000 CDN requests, 1,000,000 function calls a month', where: 'Vercel dashboard > Usage', url: 'https://vercel.com/dashboard' },
+    ],
+  }
+}
+
 export async function handleAdmin(request: Request, env: Env): Promise<Response> {
   if (request.method !== 'POST') return json(405, { error: 'Use POST' })
 
@@ -155,6 +214,17 @@ export async function handleAdmin(request: Request, env: Env): Promise<Response>
 
   try {
     if (body.action === 'summary') return json(200, await summary(db))
+
+    if (body.action === 'usage') {
+      try {
+        return json(200, await usage(db))
+      } catch (err) {
+        if (/PGRST202|42883/.test(err instanceof Error ? err.message : '')) {
+          return json(503, { error: 'Usage not ready: run supabase/migrations/20261126000024_usage_stats.sql in the SQL editor.' })
+        }
+        throw err
+      }
+    }
 
     if (body.action === 'hide') {
       if (!Number.isSafeInteger(body.id) || typeof body.hidden !== 'boolean') {

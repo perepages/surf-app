@@ -1159,6 +1159,30 @@ Money
   (`rate_limit_ip ... per hour`); log has only hashes; public gets 401 on log + salt; test
   spot + ratings deleted (the 6 log rows expire on their own). Limits: someone with many IPs
   (VPNs, botnets) still gets through; a captcha would be the next step if that ever happens.
+- [x] Step 47 (2026-11-26, scaling item 5): free-plan usage in `/admin` + nightly 80% alert.
+  - What can be read (checked 2026-11-26): Supabase database size + file storage = from SQL, no
+    token; Open-Meteo = our own count; **Supabase egress: no API** (not in the Management API's
+    endpoint list, dashboard only); **Vercel usage: only with a Vercel access token**
+    (`/v1/billing/charges`, broad account access, Hobby support undocumented): not added.
+  - Migration `...0024_usage_stats` (applied 2026-11-26 by me): `api_calls` (day x service,
+    weighted calls + requests), `log_api_calls()`, `usage_summary()` (db size by Supabase's own
+    query, 10 biggest tables, storage per bucket, 30 days of API calls); service key only
+    (public: 401 / 404, checked).
+  - `jobs/collect_forecast.py` `http()` counts every Open-Meteo request with Open-Meteo's rule
+    (pricing page: max(1, vars/10) x max(1, days/14) x locations x models; matches its 1.5 and
+    3.0 examples) and adds it to `api_calls` when the job ends (atexit; never fails a job). One
+    forecast run = 15 requests = 23.6 calls -> ~190/day at 8 runs (~2% of 10,000). The limit is
+    per IP and Actions machines change, so this is a worst case.
+  - `web/api/admin.ts` action `usage` (`FREE_LIMITS`: db 500 MB, storage 1 GB, Open-Meteo
+    10,000/day; `ALERT_AT` 0.8) + `components/AdminUsage.tsx` "Free plan" panel at the top of
+    /admin (bars, red + warning from 80%, links for egress/Vercel, fold-out tables). Loaded
+    separately so a failure doesn't block the page.
+  - `jobs/usage_check.py`: last step of `train.yml`, red (GitHub emails) at >= 80%.
+  - Tested: usage_check live (db 6%, storage ~0%, Open-Meteo 0%), a dry run recorded 23.6
+    calls, admin handler with a throwaway password (200 with real numbers, wrong password 401),
+    panel at phone size with a stubbed answer incl. a faked 85% (red + warning), no console
+    errors. `tsc` passes. Not in the panel: Supabase's 2 GB disk (read-only at 95%; includes WAL,
+    not readable from SQL).
 - [ ] Barcelona city beach cams (found 2026-11-22): `https://www.barcelona.cat/sites/default/files/clabsa/camaraN.jpg`,
   N = 1-6, shown on barcelona.cat "Banys i platges": 1 + 2 Somorrostro (1 looks SW over
   Barceloneta), 3 + 4 Port Olímpic, 5 Nova Icària, 6 Bogatell. 1624x1234 or 2452x2056, people on

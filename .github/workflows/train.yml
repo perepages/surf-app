@@ -85,3 +85,10 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 10
         run: python -m jobs.predict --hours 72 $PREDICT_FLAGS
+
+      # Free-plan check: turns red (GitHub emails you) when the database, file storage or
+      # Open-Meteo calls pass 80% of the free limit. Details in /admin (jobs/usage_check.py).
+      - name: Free-plan limits (80% alert)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: python -m jobs.usage_check

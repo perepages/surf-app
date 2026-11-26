@@ -1,8 +1,9 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { CROWDS, SURFACES, WAVE_SIZES } from '../lib/ratings'
 import { SCORE_CLASS } from './ScoreChip'
+import { UsagePanel, type Usage } from './AdminUsage'
 
-// /admin: usage counts and the latest ratings, with a button to hide spam.
+// /admin: free-plan usage, visit counts and the latest ratings, with a button to hide spam.
 // The password is checked by the server (api/admin.ts); this page only holds it in memory
 // while open, so a reload asks again. Nothing here works without the right password.
 
@@ -68,6 +69,8 @@ export default function AdminPage() {
   const [data, setData] = useState<Summary | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [usage, setUsage] = useState<Usage | null>(null)
+  const [usageError, setUsageError] = useState<string | null>(null)
 
   const load = async (pw = password) => {
     setBusy(true)
@@ -75,6 +78,13 @@ export default function AdminPage() {
     try {
       setData(await callAdmin<Summary>(pw, { action: 'summary' }))
       setUnlocked(true)
+      // Separate call: a missing migration or slow query must not block the rest of the page.
+      callAdmin<Usage>(pw, { action: 'usage' })
+        .then((u) => {
+          setUsage(u)
+          setUsageError(null)
+        })
+        .catch((err: unknown) => setUsageError(err instanceof Error ? err.message : String(err)))
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -92,6 +102,8 @@ export default function AdminPage() {
     setUnlocked(false)
     setData(null)
     setError(null)
+    setUsage(null)
+    setUsageError(null)
   }
 
   const setHidden = async (id: number, hidden: boolean) => {
@@ -163,6 +175,10 @@ export default function AdminPage() {
           {error}
         </p>
       )}
+
+      <Section title="Free plan">
+        <UsagePanel usage={usage} error={usageError} />
+      </Section>
 
       <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat title="Visits, 7 days" value={sum(7, (d) => d.visits + d.appVisits)} note={`${sum(30, (d) => d.visits + d.appVisits)} in 30 days`} />
