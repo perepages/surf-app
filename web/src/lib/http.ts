@@ -1,9 +1,9 @@
 // Network time limits. A phone on a weak signal can keep a request open for minutes without
 // failing, which would leave the app on "Checking the sea…" or "Sending…" forever. Every request
-// to Open-Meteo or Supabase goes through withTimeout, so it either answers or fails with a clear
+// for the forecast file or to Supabase goes through withTimeout, so it either answers or fails with a clear
 // message, and the app falls back to its saved copy.
 
-export const OPEN_METEO_TIMEOUT_MS = 20_000
+export const FORECAST_TIMEOUT_MS = 20_000
 export const SUPABASE_TIMEOUT_MS = 15_000
 
 /**

@@ -4,8 +4,8 @@ import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join, relative, resolve, sep } from 'node:path'
 import { defineConfig, loadEnv, type Plugin } from 'vite'
-import { CACHE_TTL_MS, FETCHED_AT_KEY, primaryRequestUrls } from './src/lib/forecastRequest.ts'
-import { DEFAULT_SPOT_ID, FALLBACK_SPOTS } from './src/lib/spots.config.ts'
+import { CACHE_TTL_MS, FETCHED_AT_KEY, forecastUrl } from './src/lib/forecastRequest.ts'
+import { DEFAULT_SPOT_ID } from './src/lib/spots.config.ts'
 import { SHARE_DESCRIPTION, SHARE_TITLE, SITE_URL } from './src/lib/site.ts'
 
 const { version } = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string }
@@ -65,21 +65,18 @@ function serviceWorker(): Plugin {
 
 /**
  * Adds a tiny inline script to index.html that, on a spot's page (/spot/<id>, or /rate =
- * the default spot), starts that spot's two Open-Meteo requests at once, in parallel with the
- * app's JavaScript, unless its saved forecast is still fresh. The app picks the responses up by
- * URL (openMeteo.ts takePrefetched). Coordinates come from the spot saved on the phone, else
- * the built-in copy. The home screen (all spots) makes its own small request, so nothing here.
+ * the default spot), starts downloading that spot's forecast file at once, in parallel with the
+ * app's JavaScript, unless the copy saved on the phone is still fresh. The app picks the
+ * response up by URL (forecast.ts takePrefetched). The home screen loads its own small file.
  */
 function prefetchForecast(): Plugin {
-  const fallbacks = Object.fromEntries(Object.values(FALLBACK_SPOTS).map((s) => [s.id, { lat: s.lat, lon: s.lon }]))
-  const templates = primaryRequestUrls({ lat: '__LAT__', lon: '__LON__' })
+  const template = forecastUrl('__ID__')
   const script = `(function(){try{
 var path=location.pathname.replace(/[/]+$/,''),m=path.match(/^[/]spot[/]([a-z0-9-]+)$/),id=m?m[1]:(path==='/rate'||location.hash==='#rate')?${JSON.stringify(DEFAULT_SPOT_ID)}:null;if(!id)return;
 var t=+localStorage.getItem(${JSON.stringify(FETCHED_AT_KEY)}+':'+id);if(t&&Date.now()-t<${CACHE_TTL_MS})return;
-var s=JSON.parse(localStorage.getItem('surf:last:spot:'+id)||'null')||${JSON.stringify(fallbacks)}[id];if(!s)return;
 var p=window.__surfPrefetch={};
 requestAnimationFrame(function(){setTimeout(function(){if(p.__started)return;
-${JSON.stringify(templates)}.forEach(function(u){u=u.replace('__LAT__',s.lat).replace('__LON__',s.lon);p[u]=fetch(u).catch(function(){return null})});
+var u=${JSON.stringify(template)}.replace('__ID__',encodeURIComponent(id));p[u]=fetch(u).catch(function(){return null});
 },0)});
 }catch(e){}})()`
   // The requests start one frame after the first paint: just as early in practice (the app's
@@ -101,8 +98,8 @@ function shareTags(): Plugin {
 }
 
 /**
- * `npm run dev` only: runs the Vercel function api/admin.ts inside Vite, so /admin works
- * locally. Server-side values (ADMIN_PASSWORD, SUPABASE_*) come from the root .env and stay
+ * `npm run dev` only: runs the Vercel functions api/admin.ts and api/forecast.ts inside Vite, so
+ * /admin and the forecast work locally. Server-side values (ADMIN_PASSWORD, SUPABASE_*) come from the root .env and stay
  * on this machine; only VITE_* values ever reach the browser.
  */
 function devApi(): Plugin {
@@ -111,27 +108,34 @@ function devApi(): Plugin {
     apply: 'serve',
     configureServer(server) {
       const env = loadEnv(server.config.mode, resolve(server.config.root, '..'), '')
-      server.middlewares.use('/api/admin', async (req, res) => {
-        try {
-          const chunks: Buffer[] = []
-          for await (const c of req) chunks.push(c as Buffer)
-          const headers = new Headers()
-          for (const [k, v] of Object.entries(req.headers)) if (typeof v === 'string') headers.set(k, v)
-          const request = new Request(`http://localhost/api/admin`, {
-            method: req.method,
-            headers,
-            body: req.method === 'GET' || req.method === 'HEAD' ? undefined : Buffer.concat(chunks),
-          })
-          const mod = (await server.ssrLoadModule('/api/admin.ts')) as typeof import('./api/admin.ts')
-          const response = await mod.handleAdmin(request, { ...process.env, ...env })
-          res.statusCode = response.status
-          response.headers.forEach((v, k) => res.setHeader(k, v))
-          res.end(Buffer.from(await response.arrayBuffer()))
-        } catch (err) {
-          res.statusCode = 500
-          res.end(String(err))
-        }
-      })
+      const routes: Record<string, (r: Request, e: Record<string, string | undefined>) => Promise<Response>> = {
+        '/api/admin': async (r, e) => ((await server.ssrLoadModule('/api/admin.ts')) as typeof import('./api/admin.ts')).handleAdmin(r, e),
+        '/api/forecast': async (r, e) =>
+          ((await server.ssrLoadModule('/api/forecast.ts')) as typeof import('./api/forecast.ts')).handleForecast(r, e),
+      }
+      for (const [route, handle] of Object.entries(routes)) {
+        server.middlewares.use(route, async (req, res) => {
+          try {
+            const chunks: Buffer[] = []
+            for await (const c of req) chunks.push(c as Buffer)
+            const headers = new Headers()
+            for (const [k, v] of Object.entries(req.headers)) if (typeof v === 'string') headers.set(k, v)
+            // Connect strips the mount path from req.url; put it back (the query string stays).
+            const request = new Request(`http://localhost${route}${(req.url ?? '').replace(/^\/(?=\?|$)/, '')}`, {
+              method: req.method,
+              headers,
+              body: req.method === 'GET' || req.method === 'HEAD' ? undefined : Buffer.concat(chunks),
+            })
+            const response = await handle(request, { ...process.env, ...env })
+            res.statusCode = response.status
+            response.headers.forEach((v, k) => res.setHeader(k, v))
+            res.end(Buffer.from(await response.arrayBuffer()))
+          } catch (err) {
+            res.statusCode = 500
+            res.end(String(err))
+          }
+        })
+      }
     },
   }
 }

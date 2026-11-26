@@ -19,7 +19,7 @@ import {
 } from '../lib/ratings'
 import { hhmm, localDate } from '../lib/format'
 import { NEAR_BEACH_KM, checkNearBeach, type NearBeachResult } from '../lib/nearBeach'
-import type { Forecast } from '../lib/openMeteo'
+import type { Forecast } from '../lib/forecast'
 import type { Spot } from '../lib/spot'
 import type { Score, ScoreValue } from '../scoring/types'
 import { IconCheck } from '../spot/Icons'

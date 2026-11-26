@@ -9,7 +9,7 @@
 // - surfers: the average community rating that day (null on days nobody rated).
 
 import { dayOfMonth, weekday } from './format'
-import type { Forecast } from './openMeteo'
+import type { Forecast } from './forecast'
 import type { AiPrediction } from './predictions'
 import type { DailyRating } from './reports'
 import type { Spot } from './spot'

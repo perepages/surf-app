@@ -29,7 +29,8 @@ on:
   # Cron is in UTC; an off-the-hour minute avoids GitHub's busiest slot, when scheduled
   # runs are often delayed or dropped. Schedules run only on the default branch (main).
   schedule:
-    - cron: "17 * * * *" # every hour at :17
+    - cron: "17 * * * *" # every hour at :17 (GitHub drops many of these: Supabase also
+    #   starts this workflow every 3 h at :07 via workflow_dispatch, migration 22)
 
 permissions:
   contents: read # the job only needs to read the code
@@ -65,6 +66,7 @@ jobs:
           cache-dependency-path: |
             jobs/requirements.txt
             jobs/requirements-push.txt
+            jobs/requirements-images.txt
       # The collectors use only the standard library; scikit-learn is installed later, only
       # for the predictions step.
 
@@ -90,23 +92,38 @@ jobs:
           echo "FLAGS=$FLAGS" >> "$GITHUB_ENV"
           echo "Collector flags:${FLAGS:- (none)}"
 
+      # GitHub's own hourly schedule is only a backup for the Supabase timer (every 3 h,
+      # migration 22): it stops here in seconds when the stored forecast is < 2.5 h old
+      # (jobs/fresh_check.py), so the database doesn't fill with hourly runs. Runs started by
+      # Supabase or the "Run workflow" button always do the work.
+      - name: Skip if the data is fresh (GitHub schedule only)
+        if: ${{ github.event_name == 'schedule' }}
+        run: python -m jobs.fresh_check >> "$GITHUB_ENV"
+
       - name: Forecast + tide (Open-Meteo)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && env.SKIP != 'true' }}
         timeout-minutes: 10
         run: python -m jobs.collect --only forecast $FLAGS
 
       - name: Buoys (PORTUS)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && env.SKIP != 'true' }}
         timeout-minutes: 10
         run: python -m jobs.collect --only buoy $FLAGS
 
+      # Pillow (jobs/requirements-images.txt) turns snapshots into WebP <= 100 KB. Installed
+      # only here, never on the laptop; if this install fails the cam step stores the JPEG.
+      - name: Install image library
+        if: ${{ !cancelled() && env.SKIP != 'true' }}
+        continue-on-error: true
+        run: pip install -r jobs/requirements-images.txt
+
       - name: Cam snapshot + cleanup (Windy)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && env.SKIP != 'true' }}
         timeout-minutes: 10
         run: python -m jobs.collect --only cam $FLAGS
 
       - name: Measured weather for ratings (Meteocat)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && env.SKIP != 'true' }}
         timeout-minutes: 10
         run: python -m jobs.collect --only rating_weather $FLAGS
 
@@ -114,22 +131,22 @@ jobs:
       # forecast (simple score, plus the AI score + reason when a model is active;
       # jobs/predict.py). Still runs if a collector failed (then it uses the last forecast).
       - name: Install training libraries
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && env.SKIP != 'true' }}
         run: pip install -r jobs/requirements.txt
 
       - name: Predictions (simple + AI score)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && env.SKIP != 'true' }}
         timeout-minutes: 10
         run: python -m jobs.predict $FLAGS
 
       # Surf alerts: after the predictions, so they use the newest scores. pywebpush is only
       # installed here (jobs/requirements-push.txt), never on the laptop.
       - name: Install push library
-        if: ${{ !cancelled() && env.VAPID_PRIVATE_KEY != '' }}
+        if: ${{ !cancelled() && env.SKIP != 'true' && env.VAPID_PRIVATE_KEY != '' }}
         run: pip install -r jobs/requirements-push.txt
 
       - name: Surf alerts (web push)
-        if: ${{ !cancelled() && env.VAPID_PRIVATE_KEY != '' }}
+        if: ${{ !cancelled() && env.SKIP != 'true' && env.VAPID_PRIVATE_KEY != '' }}
         timeout-minutes: 10
         run: |
           if [ "$TEST_PUSH" = "true" ]; then

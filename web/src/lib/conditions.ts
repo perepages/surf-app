@@ -1,7 +1,7 @@
 // Derived numbers shown next to the raw forecast: wave power and how the wind hits the beach.
 
 import { windRelation, type WindRelation } from './geo'
-import type { HourConditions } from './openMeteo'
+import type { HourConditions } from './forecast'
 
 export type PowerLevel = 1 | 2 | 3 | 4
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { CACHE_TTL_MS } from './lib/forecastRequest'
 import { readLastGood, writeLastGood } from './lib/lastGood'
-import { fetchForecast, isFresh, readCachedForecast, type Forecast } from './lib/openMeteo'
+import { fetchForecast, isFresh, isOld, readCachedForecast, type Forecast } from './lib/forecast'
 import { getAiPredictions, type AiPrediction } from './lib/predictions'
 import { FALLBACK_SPOTS, loadSpot, type Spot } from './lib/spot'
 
@@ -12,13 +13,13 @@ export type SpotForecastState =
       spot: Spot
       forecast: Forecast
       ai: Map<number, AiPrediction>
-      /** Older than 30 min and a newer copy couldn't be fetched (yet). */
+      /** Not re-downloaded in 15 min (a newer copy couldn't be fetched yet), or the job
+       *  hasn't published a new forecast for hours. */
       stale: boolean
       /** A newer copy is being fetched in the background. */
       refreshing: boolean
     }
 
-const REFRESH_AFTER_MS = 30 * 60 * 1000
 const CHECK_EVERY_MS = 5 * 60 * 1000
 const DAY_S = 24 * 3600
 
@@ -51,8 +52,8 @@ function savedState(spotId: string): SpotForecastState {
   const forecast = spot ? readCachedForecast(spot) : null
   if (!spot || !forecast) return { status: 'loading' }
   const ai = new Map(readLastGood<[number, AiPrediction][]>(`ai:${spotId}`) ?? [])
-  const stale = !isFresh(forecast)
-  return { status: 'ready', spot, forecast, ai, stale, refreshing: stale }
+  const due = !isFresh(forecast)
+  return { status: 'ready', spot, forecast, ai, stale: due || isOld(forecast), refreshing: due }
 }
 
 export function useSpotForecast(spotId: string) {
@@ -116,7 +117,7 @@ export function useSpotForecast(spotId: string) {
     const ai = sameAi(loadedAi, cachedAi) ? cachedAi : loadedAi
 
     if (spot && forecast) {
-      const stale = !isFresh(forecast)
+      const stale = !isFresh(forecast) || isOld(forecast)
       setState((prev) =>
         prev.status === 'ready' && prev.spot === spot && prev.forecast === forecast && prev.ai === ai && prev.stale === stale && !prev.refreshing
           ? prev // nothing new: no re-render
@@ -140,12 +141,13 @@ export function useSpotForecast(spotId: string) {
     return () => controller.current?.abort()
   }, [load])
 
-  // Back online, back to the app after a while, or left open on screen: refresh once the
-  // forecast is older than 30 minutes (checked every 5 minutes while visible).
-  const fetchedAt = state.status === 'ready' ? state.forecast.fetchedAt : 0
+  // Back online, back to the app after a while, or left open on screen: download again once
+  // the saved copy is older than 15 minutes (checked every 5 minutes while visible).
+  const current = state.status === 'ready' ? state.forecast : null
+  const fetchedAt = current ? (current.checkedAt ?? current.fetchedAt) : 0
   useEffect(() => {
     const refreshIfOld = () => {
-      if (document.visibilityState === 'visible' && Date.now() - fetchedAt > REFRESH_AFTER_MS) void load()
+      if (document.visibilityState === 'visible' && Date.now() - fetchedAt > CACHE_TTL_MS) void load()
     }
     const onOnline = () => void load()
     document.addEventListener('visibilitychange', refreshIfOld)

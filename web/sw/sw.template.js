@@ -2,7 +2,7 @@
 // instantly and works offline. Built into dist/sw.js by the `serviceWorker` plugin in
 // vite.config.ts, which fills in VERSION and PRECACHE.
 //
-// Data (Open-Meteo, Supabase) is NOT handled here: the app keeps the last good copy itself
+// Data (/api/forecast, Supabase) is NOT handled here: the app keeps the last good copy itself
 // (localStorage) and shows it when the network fails.
 
 const VERSION = '__VERSION__'

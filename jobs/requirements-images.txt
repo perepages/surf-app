@@ -1,0 +1,4 @@
+# Image library for the cam step (jobs/images.py: snapshots -> WebP <= 100 KB).
+# Installed ONLY in GitHub Actions (collect.yml, before the cam step), never on the laptop.
+# Without it the cam job still works and stores the original JPEG.
+Pillow==11.3.0

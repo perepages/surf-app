@@ -47,7 +47,7 @@ const en = {
   darkNow: (h: string) => `Dark now. First light ${h}.`,
   photoTodo: (slug: string) => `TODO photo · public/photos/${slug}.jpg`,
   offline: (h: string) => `Offline. Forecast saved at ${h}.`,
-  stale: (h: string) => `Open-Meteo isn't answering. Forecast from ${h}.`,
+  stale: (h: string) => `Forecast not updated since ${h}.`,
 
   at: (h: string) => `at ${h}`,
   waves: 'Waves',
@@ -299,7 +299,7 @@ const ca: Strings = {
   darkNow: (h) => `Ara és fosc. Primera llum ${h}.`,
   photoTodo: (slug) => `TODO foto · public/photos/${slug}.jpg`,
   offline: (h) => `Sense connexió. Previsió desada a les ${h}.`,
-  stale: (h) => `Open-Meteo no respon. Previsió de les ${h}.`,
+  stale: (h) => `Previsió sense actualitzar des de les ${h}.`,
 
   at: (h) => `a les ${h}`,
   waves: 'Onades',
@@ -545,7 +545,7 @@ const es: Strings = {
   darkNow: (h) => `Ahora es de noche. Primera luz ${h}.`,
   photoTodo: (slug) => `TODO foto · public/photos/${slug}.jpg`,
   offline: (h) => `Sin conexión. Previsión guardada a las ${h}.`,
-  stale: (h) => `Open-Meteo no responde. Previsión de las ${h}.`,
+  stale: (h) => `Previsión sin actualizar desde las ${h}.`,
 
   at: (h) => `a las ${h}`,
   waves: 'Olas',

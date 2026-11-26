@@ -1,13 +1,13 @@
 // Data for the home screen: every active spot with its conditions and score right now.
-// Light on purpose: one Open-Meteo request per API for ALL spots (multi-location, ~4 hours
-// each), one predictions query for all spots, and one small reports call per spot for crowd.
+// Light on purpose: ONE forecast file for all spots (/api/forecast?spot=all, published hourly by
+// jobs/collect_forecast.py; the app never calls Open-Meteo itself), one predictions query for
+// all spots, and one small reports call per spot for crowd.
 // The full 18-day forecast is only loaded when a spot is opened.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { MARINE_URL, WEATHER_URL, FALLBACK_MARINE_MODEL } from './forecastRequest'
-import { OPEN_METEO_TIMEOUT_MS, withTimeout } from './http'
+import { decodeHours, getForecastFile, type FilePart, type HourConditions } from './forecast'
+import { CACHE_TTL_MS, OLD_AFTER_MS, SPOT_LIST_URL } from './forecastRequest'
 import { readLastGood, writeLastGood } from './lastGood'
-import type { HourConditions } from './openMeteo'
 import type { AiPrediction } from './predictions'
 import type { Crowd } from './ratings'
 import { FALLBACK_SPOTS, SPOT_COLUMNS, spotFromRow, type Spot, type SpotRow } from './spot'
@@ -31,8 +31,10 @@ export interface SpotListData {
   /** spot id -> (valid_at unix s -> AI prediction). */
   ai: Record<string, Record<number, AiPrediction>>
   crowd: Record<string, { crowd: Crowd | null; count: number }>
-  /** Unix ms of the Open-Meteo fetch. */
+  /** Unix ms when the job asked Open-Meteo (oldest spot in the file). */
   fetchedAt: number
+  /** Unix ms when this phone downloaded the file. */
+  checkedAt: number
   /** Local date when crowd was read: a copy from another day isn't shown as today's. */
   crowdOn: string
 }
@@ -42,8 +44,7 @@ export type SpotListState =
   | { status: 'error'; message: string }
   | { status: 'ready'; data: SpotListData; stale: boolean; refreshing: boolean }
 
-const SAVED_KEY = 'spot-list:v2'
-const REFRESH_AFTER_MS = 30 * 60 * 1000
+const SAVED_KEY = 'spot-list:v3'
 const CHECK_EVERY_MS = 5 * 60 * 1000
 const todayKey = () => new Date().toDateString()
 
@@ -57,107 +58,14 @@ async function loadActiveSpots(signal: AbortSignal): Promise<Spot[]> {
   return spots
 }
 
-// ---------- Open-Meteo, all spots in one request ----------
+// ---------- forecast: all spots in one file ----------
 
-const WAVE_ONLY = [
-  'wave_height', 'wave_period', 'wave_direction', 'swell_wave_height', 'swell_wave_period', 'swell_wave_direction',
-  'secondary_swell_wave_height', 'secondary_swell_wave_period', 'secondary_swell_wave_direction',
-  'wind_wave_height', 'wind_wave_period', 'wind_wave_direction',
-]
-const MARINE_VARS = [...WAVE_ONLY, 'sea_level_height_msl', 'sea_surface_temperature']
-const WIND_VARS = [
-  'wind_speed_10m', 'wind_direction_10m', 'wind_gusts_10m', 'is_day',
-  'precipitation', 'precipitation_probability', 'weather_code', 'cape', 'temperature_2m',
-]
-/** History for the physics score: wind over 6/12/24 h, rain over 72 h. */
-const PAST_HOURS = 72
-
-type Hourly = Record<string, (number | null)[]> & { time: number[] }
-interface Located {
-  hourly: Hourly
-}
-
-async function getMany(url: string, spots: Spot[], params: Record<string, string>, signal: AbortSignal): Promise<Located[]> {
-  const q = new URLSearchParams({
-    latitude: spots.map((s) => s.lat).join(','),
-    longitude: spots.map((s) => s.lon).join(','),
-    timeformat: 'unixtime',
-    past_hours: String(PAST_HOURS),
-    forecast_hours: '4',
-    ...params,
-  })
-  return withTimeout(signal, OPEN_METEO_TIMEOUT_MS, 'Open-Meteo', async (s) => {
-    const res = await fetch(`${url}?${q}`, { signal: s })
-    if (!res.ok) throw new Error(`Open-Meteo ${new URL(url).hostname}: HTTP ${res.status}`)
-    const body = (await res.json()) as Located | Located[]
-    return Array.isArray(body) ? body : [body] // one location comes back as an object
-  })
-}
-
-const v = (h: Hourly | undefined, name: string, i: number | undefined): number | null =>
-  h && i !== undefined ? (h[name]?.[i] ?? null) : null
-
-async function loadHours(spots: Spot[], signal: AbortSignal): Promise<Record<string, HourConditions[]>> {
-  if (!spots.length) return {}
-  const [marine, weather] = await Promise.all([
-    getMany(MARINE_URL, spots, { hourly: MARINE_VARS.join(',') }, signal),
-    getMany(WEATHER_URL, spots, { hourly: WIND_VARS.join(',') }, signal),
-  ])
-  // Same null fallback as the full forecast: GFS wave fills hours the default model leaves empty.
-  const gaps = spots.filter((_, i) => marine[i]?.hourly.wave_height?.some((x) => x == null))
-  if (gaps.length) {
-    try {
-      const fb = await getMany(MARINE_URL, gaps, { hourly: WAVE_ONLY.join(','), models: FALLBACK_MARINE_MODEL }, signal)
-      gaps.forEach((spot, gi) => {
-        const m = marine[spots.indexOf(spot)]?.hourly
-        const f = fb[gi]?.hourly
-        if (!m || !f) return
-        const idx = new Map(f.time.map((t, j) => [t, j]))
-        m.time.forEach((t, i) => {
-          for (const name of WAVE_ONLY) if (m[name] && m[name][i] == null) m[name][i] = v(f, name, idx.get(t))
-        })
-      })
-    } catch (err) {
-      if (signal.aborted) throw err
-    }
-  }
-  const out: Record<string, HourConditions[]> = {}
-  spots.forEach((spot, i) => {
-    const m = marine[i]?.hourly
-    const w = weather[i]?.hourly
-    if (!m) return
-    const wi = new Map((w?.time ?? []).map((t, j) => [t, j]))
-    out[spot.id] = m.time.map((t, j) => {
-      const k = wi.get(t)
-      return {
-        time: t,
-        waveHeight: v(m, 'wave_height', j),
-        wavePeriod: v(m, 'wave_period', j),
-        waveDirection: v(m, 'wave_direction', j),
-        swellHeight: v(m, 'swell_wave_height', j),
-        swellPeriod: v(m, 'swell_wave_period', j),
-        swellDirection: v(m, 'swell_wave_direction', j),
-        tide: v(m, 'sea_level_height_msl', j),
-        windSpeed: v(w, 'wind_speed_10m', k),
-        windDirection: v(w, 'wind_direction_10m', k),
-        windGusts: v(w, 'wind_gusts_10m', k),
-        isDay: k === undefined ? true : v(w, 'is_day', k) === 1,
-        secondarySwellHeight: v(m, 'secondary_swell_wave_height', j),
-        secondarySwellPeriod: v(m, 'secondary_swell_wave_period', j),
-        secondarySwellDirection: v(m, 'secondary_swell_wave_direction', j),
-        windWaveHeight: v(m, 'wind_wave_height', j),
-        windWavePeriod: v(m, 'wind_wave_period', j),
-        windWaveDirection: v(m, 'wind_wave_direction', j),
-        seaTemp: v(m, 'sea_surface_temperature', j),
-        precipitation: v(w, 'precipitation', k),
-        precipProb: v(w, 'precipitation_probability', k),
-        weatherCode: v(w, 'weather_code', k),
-        cape: v(w, 'cape', k),
-        airTemp: v(w, 'temperature_2m', k),
-      }
-    })
-  })
-  return out
+/** The hours around now for every spot in the file (the history the score needs + a day ahead). */
+async function loadHours(signal: AbortSignal): Promise<{ hours: Record<string, HourConditions[]>; fetchedAt: number }> {
+  const file = await getForecastFile<{ fetchedAt: string; spots: Record<string, FilePart> }>(SPOT_LIST_URL, signal)
+  const hours: Record<string, HourConditions[]> = {}
+  for (const [id, part] of Object.entries(file.spots)) hours[id] = decodeHours(part)
+  return { hours, fetchedAt: Date.parse(file.fetchedAt) || Date.now() }
 }
 
 // ---------- Supabase: AI scores + crowd ----------
@@ -244,21 +152,21 @@ const coversNow = (d: SpotListData) => {
   const nowS = Date.now() / 1000
   return d.spots.every((s) => (d.hours[s.id] ?? []).some((h) => nowS >= h.time && nowS < h.time + 3600))
 }
-const fresh = (d: SpotListData) => Date.now() - d.fetchedAt < REFRESH_AFTER_MS && coversNow(d)
-const sameSpots = (a: Spot[], b: Spot[]) =>
-  a.length === b.length && a.every((s, i) => s.id === b[i].id && s.lat === b[i].lat && s.lon === b[i].lon && s.name === b[i].name && s.beachOrientation === b[i].beachOrientation)
+const fresh = (d: SpotListData) => Date.now() - (d.checkedAt ?? d.fetchedAt) < CACHE_TTL_MS && coversNow(d)
+/** "Old" (banner) when the job hasn't published for hours, even if just downloaded. */
+const isOld = (d: SpotListData) => Date.now() - d.fetchedAt > OLD_AFTER_MS
 
 function savedState(): SpotListState {
   const saved = readLastGood<SpotListData>(SAVED_KEY)
   if (!saved) return { status: 'loading' }
   const ok = fresh(saved)
-  return { status: 'ready', data: saved, stale: !ok, refreshing: !ok }
+  return { status: 'ready', data: saved, stale: !ok || isOld(saved), refreshing: !ok }
 }
 
 /**
  * Shows the saved list at once (instant, offline), then refreshes: spots, conditions, AI and
- * crowd in parallel. Conditions start with the spots already known (saved or built-in) so they
- * don't wait for the spot list; if the database has other spots, they're fetched again.
+ * crowd in parallel. The forecast file covers every active spot, so it doesn't wait for the
+ * spot list.
  */
 export function useSpotList() {
   const [state, setState] = useState<SpotListState>(savedState)
@@ -274,7 +182,7 @@ export function useSpotList() {
 
     const spotsP = supabaseConfigured ? loadActiveSpots(signal) : Promise.resolve(known)
     const reuse = saved != null && fresh(saved)
-    const hoursP = reuse ? Promise.resolve(saved.hours) : loadHours(known, signal)
+    const hoursP = reuse ? Promise.resolve({ hours: saved.hours, fetchedAt: saved.fetchedAt }) : loadHours(signal)
     const [spotsR, hoursR, aiR, crowdR] = await Promise.allSettled([
       spotsP,
       hoursP,
@@ -285,19 +193,10 @@ export function useSpotList() {
 
     const spots = spotsR.status === 'fulfilled' ? spotsR.value : known
     if (spotsR.status === 'fulfilled') writeLastGood('spots:list', spots)
-    let hours = hoursR.status === 'fulfilled' ? hoursR.value : null
-    let fetchedAt = reuse || hoursR.status === 'rejected' ? (saved?.fetchedAt ?? 0) : Date.now()
-    if (!sameSpots(spots, known)) {
-      // The database has spots the first request didn't cover (or moved one).
-      try {
-        hours = await loadHours(spots, signal)
-        fetchedAt = Date.now()
-      } catch {
-        if (signal.aborted) return
-      }
-    }
-    if (signal.aborted) return
-    if (!hours) hours = saved?.hours ?? null
+    // The file has every active spot, so a spot list that differs from the saved one needs nothing more.
+    const hours = hoursR.status === 'fulfilled' ? hoursR.value.hours : (saved?.hours ?? null)
+    const fetchedAt = hoursR.status === 'fulfilled' ? hoursR.value.fetchedAt : (saved?.fetchedAt ?? 0)
+    const checkedAt = hoursR.status === 'fulfilled' && !reuse ? Date.now() : (saved?.checkedAt ?? 0)
 
     if (!hours) {
       const reason = hoursR.status === 'rejected' ? hoursR.reason : null
@@ -307,7 +206,7 @@ export function useSpotList() {
           ? 'You’re offline and there’s no saved forecast on this phone yet.'
           : reason instanceof Error
             ? reason.message
-            : 'Open-Meteo didn’t answer.',
+            : 'The forecast didn’t load.',
       })
       return
     }
@@ -318,9 +217,10 @@ export function useSpotList() {
       crowd: (crowdR.status === 'fulfilled' && crowdR.value) || (saved?.crowdOn === todayKey() ? saved.crowd : {}),
       crowdOn: crowdR.status === 'fulfilled' && crowdR.value ? todayKey() : (saved?.crowdOn ?? todayKey()),
       fetchedAt,
+      checkedAt,
     }
     writeLastGood(SAVED_KEY, data)
-    setState({ status: 'ready', data, stale: !fresh(data), refreshing: false })
+    setState({ status: 'ready', data, stale: !fresh(data) || isOld(data), refreshing: false })
   }, [])
 
   useEffect(() => {

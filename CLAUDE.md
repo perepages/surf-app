@@ -1057,6 +1057,91 @@ Money
   "to confirm" note removed (`confirmed: true`, values = DB, confirmed step 32), colour key under
   the wind drawing (white = swell, green/sand/red = wind, wedge = swell window, dashed = beach
   faces). Hero photos use the thumb on phones (`srcset`). Checked at 390 + 1280 px.
+- [x] Step 42 (2026-11-26, scaling item 1 of 6): **the app no longer calls Open-Meteo**. Not
+  released (on `demo/new-design`, uncommitted at the time of writing).
+  - `jobs/collect_forecast.py`: the same 3-4 requests per spot now also ask 14 past days, `is_day`
+    and daily sunrise/sunset (`timezone=auto`, unix times; one call per API, not two). From them:
+    `forecasts` rows as before (+ `is_day`), `spot_sun_times` rows, and the app's files in the
+    new private bucket **`forecast-files`**: `spots/<id>.json` (every `HourConditions` field as
+    columns of numbers, 14 days back .. 5 days ahead, ~42 KB, ~9 KB compressed) and `index.json`
+    (all active spots, 72 h back .. 36 h ahead, ~52 KB; a spot whose fetch failed keeps its last
+    file's hours). Field names = the app's; `FILE_VERSION` 1 in both. Checked: the file's values
+    equal what the browser got from Open-Meteo (2592 values, 0 differences).
+  - Migration `...0020_forecast_files` (applied 2026-11-26 by me): `forecasts.is_day`,
+    `spot_sun_times` (service key only), bucket `forecast-files` (private). Until it's applied
+    the job stores rows without `is_day` and skips sun times (one warning each); the bucket was
+    already created via the Storage API on 2026-11-26 and the 6 files published once by hand.
+  - `web/api/forecast.ts` (Vercel function): `GET /api/forecast?spot=<id>` or `?spot=all`,
+    reads the file with the service key; `Vercel-CDN-Cache-Control: max-age=300,
+    stale-while-revalidate=86400`, browsers 60 s. Any other URL shape -> 400 (can't bypass the
+    cache with random parameters); missing -> 404 (CDN-cached 60 s). Also runs in `npm run dev`
+    (devApi) and `npm run serve:dist` (Node runs the .ts, reads root `.env`).
+  - App: `lib/openMeteo.ts` -> `lib/forecast.ts` (same `Forecast` / `HourConditions` shapes;
+    `checkedAt` added = when the phone downloaded; `fetchedAt` = when the job asked Open-Meteo),
+    re-download after 15 min (`CACHE_TTL_MS`), banner "Forecast not updated since HH:MM" when the
+    file is > 4 h old (`OLD_AFTER_MS`), "Next update" = next :25. Home list reads `index.json`
+    (one request for all spots). index.html prefetch = the spot's file; Open-Meteo preconnects
+    removed. Cache keys bumped (`forecast:v5`, `spot-list:v3`). Privacy page: no Open-Meteo from
+    the browser; now also says Google Fonts (IBM Plex Mono, added in step 40) sees the IP.
+  - Tested: unit tests `jobs.tests.test_forecast_files` (4) + physics/train (27) pass; live
+    dry run (5 spots); public key can't read or list the bucket; dev app + prod build at phone
+    size: home + spot pages from the files, 0 Open-Meteo requests, old-file banner (faked in that
+    browser, removed), prefetch reused, `npm run measure` (Edge): service worker, offline start,
+    installable OK. `tsc`, lint (old warnings only), build pass.
+  - **Depends on the hourly job running**: GitHub currently starts it only ~3x/day, so the app's
+    forecast would be up to ~12 h old (banner shows). Fixed by step 43 (once set up).
+- [x] Step 43 (2026-11-26): the collect job is started by Supabase every 3 hours (my choice: data
+  every 3 h is enough). Migration `...0022_dispatch_collect` (applied 2026-11-26 by me; needs a GitHub
+  fine-grained token, only `perepages/surf-app`, "Actions: Read and write", stored in Supabase
+  Vault as `github_actions_token` BEFORE running the file; steps + check queries are in the
+  file): pg_cron job `dispatch-collect` at `7 */3 * * *` UTC calls `public.dispatch_collect()`,
+  which POSTs GitHub's workflow_dispatch for `collect.yml` on `main` through pg_net. GitHub's own
+  `17 * * * *` schedule stays as a backup, but those runs first run `jobs/fresh_check.py` and
+  stop in seconds when the newest stored forecast is < 2.5 h old (every later step has
+  `env.SKIP != 'true'`), so the database gets ~8 runs a day, not 24 (my rule: most efficient
+  cadence, nothing extra). Supabase-started and button runs always do the work.
+  Dispatched runs don't stop after 60 days without commits. App: "Next update" = next 3-hourly
+  slot + 22 min (`nextPublish` in `SpotScreen.tsx`); "not updated" banner after 4 h. Surf alerts
+  and cam snapshots now also run at least every 3 h. Not done: the nightly train is still on
+  GitHub's schedule (~10 h late; one more `cron.schedule` line would fix it). Token expiry: note
+  the date when created; an expired token = runs only from GitHub's schedule again (no alert).
+  **Set up 2026-11-26 (step by step with me):** fine-grained token "surf-app scheduler" (only
+  surf-app, Actions read+write) saved in Vault as `github_actions_token`; migrations 20, 21, 22
+  applied; `select public.dispatch_collect()` -> 204, GitHub run 21:15 UTC (workflow_dispatch)
+  succeeded; `cron.job` has `dispatch-collect` active. Until the new code is pushed to `main`,
+  the timer runs the OLD collect workflow every 3 h (harmless). **Token expires 2026-11-26 +
+  1 year = 2027-11-26**: renew before then (new token on GitHub, then in the SQL editor
+  `select vault.update_secret((select id from vault.secrets where name =
+  'github_actions_token'), '<new token>');`).
+- [x] Step 44 (2026-11-26, scaling item 3): forecasts older than 90 days are deleted except what
+  training reads (my rule: keep old data only if it helps the AI). Training reads, per rating,
+  the rows valid at the rating hour and the 72 h before it; nothing else old is ever read, so
+  deleting the rest can't change the AI. Migration `...0021_prune_old_forecasts` (applied
+  2026-11-26 by me): `prune_old_forecasts(p_days 90, p_limit 20000)` deletes rows fetched AND valid > 90
+  days ago unless a non-hidden rating of that spot has `surfed_at` within valid_at + 73 h ..
+  valid_at - 1 h; `count_old_forecasts(p_days)` counts the same (dry run); both service key only.
+  `collect_forecast.py` calls it after thinning (`PRUNE_DAYS`; `--no-thin` skips both; a missing
+  function or failure only warns). Hidden (spam) ratings don't protect rows; unhiding one later
+  can't bring them back. The 2022 past-session rows after each session's hour go too. With ~90
+  days kept: ~5 MB per spot instead of ~20 MB/year growing. Tested: dry run warns cleanly while
+  the migration is missing; the SQL itself is untested until applied (nothing is old enough to
+  delete before ~Feb 2027 anyway, except the 2022 past-session rows).
+- [x] Step 45 (2026-11-26, scaling item 2): cam snapshots as WebP, kept 7 days. **New library
+  (approved): Pillow 11.3.0** in `jobs/requirements-images.txt`, installed only in
+  `collect.yml` ("Install image library", continue-on-error) before the cam step; never in
+  `jobs/requirements.txt`. (Pillow 9.3.0 was already on the laptop from another install; the
+  project doesn't install it there.) `jobs/images.py` `to_webp`: width capped at 1600 px,
+  quality 80/70/60/50, then shrink to fit <= 100 KB; EXIF/GPS dropped; any failure or no
+  Pillow -> the original image is stored + a warning (a snapshot is never lost over this).
+  `collect_cam.py`: files are `<spot>/<time>.webp`, uploaded with `cache-control: max-age=1
+  year, immutable` (a path never changes content, so a CDN can keep it); `KEEP_DAYS` 60 -> 7,
+  still keeping the snapshot nearest each non-hidden rating (within 2 h). Measured: Windy
+  previews 9-20 KB JPEG -> 5-16 KB WebP; a 2.2 MB photo -> 94 KB in ~5 s. Storage: ~3 cams x
+  ~4 images/day (3-hourly runs) x 7 days x ~10 KB = ~1 MB in total. Tests:
+  `jobs.tests.test_images` (3, skipped without Pillow) + live cam dry run. **Not done: showing
+  snapshots to users** (bucket stays private; serving them through Supabase's CDN needs the
+  Windy terms decision for public display, open since step 24). Snapshots already stored as
+  .jpg stay until the 7-day cleanup removes them.
 - [ ] Barcelona city beach cams (found 2026-11-22): `https://www.barcelona.cat/sites/default/files/clabsa/camaraN.jpg`,
   N = 1-6, shown on barcelona.cat "Banys i platges": 1 + 2 Somorrostro (1 looks SW over
   Barceloneta), 3 + 4 Port Olímpic, 5 Nova Icària, 6 Bogatell. 1624x1234 or 2452x2056, people on

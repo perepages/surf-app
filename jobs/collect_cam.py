@@ -5,14 +5,17 @@ Per active spot with `spots.windy_cam_id`:
      from Open-Meteo for the spot, no key).
   2. Ask Windy Webcams API v3 for the cam (fresh image URL) and download the image at once.
      Windy image URLs expire after 10 minutes, so the URL is never stored or reused.
-  3. Upload it to the private `snapshots` bucket as `<spot>/<UTC time>.jpg`,
-     e.g. `vilanova/2026-11-22T121705Z.jpg`, and insert a `snapshots` row.
+  3. Convert it to WebP of at most 100 KB (jobs/images.py; Pillow, installed only in GitHub
+     Actions; without it the original JPEG is stored, with a warning) and upload it to the
+     private `snapshots` bucket as `<spot>/<UTC time>.webp`, e.g.
+     `vilanova/2026-11-22T121705Z.webp` (cache-control 1 year: a path is never reused), and
+     insert a `snapshots` row.
      `taken_at` = when Windy says the image was captured (`lastUpdatedOn`), so if the cam
      hasn't updated since the last run, the same image isn't stored twice. An image older
      than 2 h (frozen cam) is skipped.
-  4. Delete snapshots older than 60 days (file + row) to stay in the free tier, except the
+  4. Delete snapshots older than 7 days (file + row) to stay in the free tier, except the
      one closest in time to each rating of that spot (within 2 h of `surfed_at`; hidden
-     spam ratings don't count). Up to 200 per spot per run; hourly runs catch up.
+     spam ratings don't count). Up to 200 per spot per run; later runs catch up.
 
 Crowd counts (`crowd_water`/`crowd_beach`) stay empty until the YOLO step is built.
 The free Windy plan only gives the 400x224 "preview" image.
@@ -21,7 +24,8 @@ Run from the repo root:
   python -m jobs.collect_cam              # snapshot + cleanup
   python -m jobs.collect_cam --dry-run    # download only, write/delete nothing
   python -m jobs.collect_cam --any-time   # ignore the night check (testing)
-Needs SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, WINDY_API_KEY. Standard library only.
+Needs SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, WINDY_API_KEY. Standard library (+ Pillow if
+installed, for WebP).
 Exit code 1 if any spot failed (the others still run).
 """
 from __future__ import annotations
@@ -33,7 +37,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from jobs import log
+from jobs import images, log
 from jobs.check_connections import ROOT, env, load_dotenv
 from jobs.collect_forecast import HTTP_TIMEOUT_S, WEATHER_URL, Supabase, http
 
@@ -43,7 +47,7 @@ BUCKET = "snapshots"
 
 DAYLIGHT_MARGIN = timedelta(minutes=20)   # dawn patrol counts
 MAX_IMAGE_AGE = timedelta(hours=2)        # older = cam frozen, skip
-KEEP_DAYS = 60
+KEEP_DAYS = 7
 RATING_WINDOW = timedelta(hours=2)        # snapshot "linked" to a rating if this close
 CLEANUP_BATCH = 200
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -75,7 +79,9 @@ class CamSupabase(Supabase):
 
     def upload(self, path: str, data: bytes, content_type: str) -> None:
         # x-upsert: a file left by a run that failed before inserting its row is replaced.
-        headers = {**self.headers, "Content-Type": content_type, "x-upsert": "true"}
+        # A path (spot + capture time) never gets other content, so caches may keep it a year.
+        headers = {**self.headers, "Content-Type": content_type, "x-upsert": "true",
+                   "cache-control": "max-age=31536000, immutable"}
         http(f"{self.storage}/object/{BUCKET}/{urllib.parse.quote(path)}", headers,
              method="POST", body=data)
 
@@ -151,7 +157,7 @@ def snapshot_spot(db: CamSupabase | None, spot: dict[str, Any], windy_key: str,
         daylight, why = is_daylight(spot, now)
     except Exception as exc:
         # Without sun times, take the snapshot anyway: a dark image costs ~12 KB and is
-        # pruned after 60 days; a missing daylight image is gone for good.
+        # pruned after 7 days; a missing daylight image is gone for good.
         log.warn(JOB, f"{label} sun times unavailable ({type(exc).__name__}: {exc}); "
                       "taking the snapshot anyway")
         daylight, why = True, "sun times unknown"
@@ -166,10 +172,20 @@ def snapshot_spot(db: CamSupabase | None, spot: dict[str, Any], windy_key: str,
         log.warn(JOB, f"{label} skipped: image is {age.total_seconds() / 3600:.1f} h old (cam frozen?)")
         return
 
+    webp = images.to_webp(data)
+    if webp is not None:
+        original_kb = len(data) // 1024
+        data, content_type = webp, "image/webp"
+        note = f"webp from {original_kb} KB"
+    else:
+        note = ("original kept: Pillow not installed" if not images.pillow_available()
+                else "original kept: WebP conversion failed")
+        if images.pillow_available() or db is not None:
+            log.warn(JOB, f"{label} {note}")
     ext = {"image/png": "png", "image/webp": "webp"}.get(content_type, "jpg")
     path = f"{spot['id']}/{taken_at:%Y-%m-%dT%H%M%SZ}.{ext}"
     if db is None:
-        log.ok(JOB, f"{label} would store {path} ({len(data) // 1024} KB, {why}, "
+        log.ok(JOB, f"{label} would store {path} ({len(data) // 1024} KB, {note}, {why}, "
               f"image {age.total_seconds() / 60:.0f} min old)")
         return
     if db.snapshot_exists(spot["id"], taken_at):
@@ -177,7 +193,7 @@ def snapshot_spot(db: CamSupabase | None, spot: dict[str, Any], windy_key: str,
         return
     db.upload(path, data, content_type)
     db.insert_snapshot({"spot_id": spot["id"], "taken_at": iso(taken_at), "image_path": path})
-    log.ok(JOB, f"{label} stored {path} ({len(data) // 1024} KB, "
+    log.ok(JOB, f"{label} stored {path} ({len(data) // 1024} KB, {note}, "
           f"image {age.total_seconds() / 60:.0f} min old)")
 
 

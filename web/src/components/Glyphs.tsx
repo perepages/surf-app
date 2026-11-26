@@ -2,7 +2,7 @@
 
 import { hh } from '../lib/format'
 import type { PowerLevel } from '../lib/conditions'
-import type { HourConditions } from '../lib/openMeteo'
+import type { HourConditions } from '../lib/forecast'
 
 /** Arrow pointing where the wind blows TO (rotate from windInfo). Colour from `currentColor`. */
 export function WindArrow({ rotate, size = 14, className = '' }: { rotate: number; size?: number; className?: string }) {

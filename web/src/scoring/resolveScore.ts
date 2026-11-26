@@ -3,7 +3,7 @@
 // Shape for that hour, those replace the rule-based ones; comfort and safety always stay rules
 // and use YOUR preferences. This is the one place the UI asks for a score.
 
-import type { HourConditions } from '../lib/openMeteo'
+import type { HourConditions } from '../lib/forecast'
 import type { AiPrediction } from '../lib/predictions'
 import type { Spot } from '../lib/spot'
 import { evaluate, overallScore, verdictFrom, type Prefs, type PhysicsResult, type Series } from './physics'

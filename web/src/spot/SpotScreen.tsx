@@ -14,7 +14,7 @@ import { CHART_DAYS } from '../lib/reports'
 import { compass } from '../lib/geo'
 import { windRelation } from '../lib/geo'
 import type { ModelInfo } from '../lib/modelInfo'
-import type { ForecastDay, HourConditions } from '../lib/openMeteo'
+import type { ForecastDay, HourConditions } from '../lib/forecast'
 import { usePrefs } from '../lib/prefs'
 import { readLocalAlerts, syncAlerts } from '../lib/push'
 import type { ReportsState } from '../lib/reports'
@@ -52,8 +52,16 @@ const daylight = (day: ForecastDay) => {
 
 const scoreOf = (scores: Scores, h: HourConditions): ScoreValue => scores.get(h.time)?.value ?? 1
 const hourNum = (h: HourConditions, tz: string) => Number(hh(h.time, tz))
-/** Time the forecast is refetched (useSpotForecast refetches after 30 min). */
-const REFETCH_MIN = 30
+/** Supabase starts the collect job every 3 h at :07 UTC (migration 22); the new file reaches
+ *  phones ~15 min later. GitHub's own hourly schedule sometimes updates sooner. */
+const PUBLISH_EVERY_S = 3 * 3600
+const PUBLISH_AFTER_S = 22 * 60
+/** Next guaranteed publish after both now and the current file's time. */
+function nextPublish(now: number, fetchedS: number): number {
+  const after = Math.max(now, fetchedS)
+  const at = Math.floor(after / PUBLISH_EVERY_S) * PUBLISH_EVERY_S + PUBLISH_AFTER_S
+  return at > after ? at : at + PUBLISH_EVERY_S
+}
 
 /** Highest score among `hours`, and the first run of hours that has it. */
 function bestRun(hours: HourConditions[], scores: Scores) {
@@ -354,7 +362,7 @@ function Hero(p: {
   const meta = [
     `${p.dayLabel} · ${wd(t, p.now, tz)} ${dayOfMonth(p.now, tz)}`,
     `${t.updated} ${hhmm(p.fetchedS, tz)}`,
-    `${t.nextUpdate} ${hhmm(p.fetchedS + REFETCH_MIN * 60, tz)}`,
+    `${t.nextUpdate} ${hhmm(nextPublish(p.now, p.fetchedS), tz)}`,
   ]
   return (
     <section aria-label={p.name} className={`relative isolate overflow-hidden rounded-[10px] border border-line ${p.className}`}>

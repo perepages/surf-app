@@ -2,7 +2,7 @@
 // trains on, so it is stored with a copy of exactly what the app showed for that hour.
 
 import { hh, localDate } from './format'
-import type { Forecast, HourConditions } from './openMeteo'
+import type { Forecast, HourConditions } from './forecast'
 import type { Spot } from './spot'
 import { insertRow } from './supabase'
 import type { Score } from '../scoring/types'

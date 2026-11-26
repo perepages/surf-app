@@ -3,7 +3,7 @@
 // where waves are usually small, short-period and very sensitive to wind.
 // The nightly model replaces this through the predictions table (see resolveScore.ts).
 
-import type { HourConditions } from '../lib/openMeteo'
+import type { HourConditions } from '../lib/forecast'
 import { angleDiff, compass, windRelation } from '../lib/geo'
 import type { Spot } from '../lib/spot'
 import { SCORE_LABELS, toScoreValue, type Score } from './types'

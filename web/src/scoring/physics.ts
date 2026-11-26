@@ -2,7 +2,7 @@
 // A line-by-line copy of jobs/physics.py (same constant names): keep the two in sync.
 // `npm run physics-parity` checks this file against the Python one on generated cases.
 
-import type { HourConditions } from '../lib/openMeteo'
+import type { HourConditions } from '../lib/forecast'
 
 export interface PhysicsSpot {
   beachOrientation: number

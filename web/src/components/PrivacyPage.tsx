@@ -66,10 +66,11 @@ export function PrivacyPage() {
 
       <Section title="Other services your browser talks to">
         <p>
-          Open-Meteo, for the forecast. It gets the beach’s position, never yours, and sees your IP
-          address, as any website you load does. OpenStreetMap, only when you open the map: its
-          servers send the map pictures for the area on screen and see your IP address too.
-          Everything else (including the fonts) comes from this app itself.
+          None for the forecast: our server asks Open-Meteo once an hour for every beach, and the app
+          downloads the result from this site. OpenStreetMap, only when you open the map: its
+          servers send the map pictures for the area on screen and see your IP address. Google Fonts,
+          for the font used for numbers: it sees your IP address too. Everything else comes from this
+          app itself or our database (Supabase).
         </p>
       </Section>
 
