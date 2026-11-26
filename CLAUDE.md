@@ -1190,7 +1190,20 @@ Money
   ~4,650 daily users, **Supabase egress** at ~5,900 (worst case ~900 if counted uncompressed),
   **database** in ~7 months at 10,000 daily users. Open-Meteo stays at ~2% (no longer depends on
   users). Cheapest fixes listed in order (prune models; AI scores + report summary in the
-  forecast files; CDN 5 -> 15 min; ...): **none built yet, my decision**.
+  forecast files; CDN 5 -> 15 min; ...): fixes 1 and 3 built in step 49 (my choice); fix 2
+  (AI scores + report summary in the files) not built yet.
+- [x] Step 49 (2026-11-26): the two cheapest fixes from step 48.
+  - `jobs/train.py` `prune_models()` (end of a whole nightly run, not with `--spot`; failure =
+    warning): models not active and trained > `KEEP_MODEL_DAYS` (7) days ago are deleted, files
+    first (a general model's shared file only when no kept row uses it; `.json` metrics too),
+    then rows. `--dry-run` only counts. Tests `jobs.tests.test_prune_models` (3, fake database);
+    live dry run: nothing to prune yet (no models).
+  - `web/api/forecast.ts` `CDN_FRESH_S` 300 -> 900 (function calls + origin transfer / 3);
+    "Next update" = 3-hourly slot + 32 min.
+- [x] **Released 2026-11-26 as app 0.7.0** (steps 42-49: forecast files instead of Open-Meteo in
+  the browser, 3-hourly job via Supabase, 90-day forecast pruning, WebP cams kept 7 days, per-IP
+  rating limit, /admin "Free plan" panel + nightly 80% alert, model pruning, 15-min CDN).
+  Migrations 20-24 were applied before the push.
 - [ ] Barcelona city beach cams (found 2026-11-22): `https://www.barcelona.cat/sites/default/files/clabsa/camaraN.jpg`,
   N = 1-6, shown on barcelona.cat "Banys i platges": 1 + 2 Somorrostro (1 looks SW over
   Barceloneta), 3 + 4 Port Olímpic, 5 Nova Icària, 6 Bogatell. 1624x1234 or 2452x2056, people on

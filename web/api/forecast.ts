@@ -14,8 +14,10 @@
 type Env = Record<string, string | undefined>
 
 const BUCKET = 'forecast-files'
-/** Fresh at the CDN for 5 min; then stale-while-revalidate for up to a day (job hiccups). */
-const CDN_FRESH_S = 300
+/** Fresh at the CDN for 15 min (the job publishes every ~3 h; 15 instead of 5 min = a third of the
+ *  function calls and origin transfer, docs/free-plan-limits.md); then stale-while-revalidate
+ *  for up to a day (job hiccups). */
+const CDN_FRESH_S = 900
 const CDN_STALE_S = 86_400
 /** Browsers may reuse it for a minute (the app keeps its own copy anyway). */
 const BROWSER_S = 60

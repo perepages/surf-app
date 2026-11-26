@@ -53,9 +53,10 @@ const daylight = (day: ForecastDay) => {
 const scoreOf = (scores: Scores, h: HourConditions): ScoreValue => scores.get(h.time)?.value ?? 1
 const hourNum = (h: HourConditions, tz: string) => Number(hh(h.time, tz))
 /** Supabase starts the collect job every 3 h at :07 UTC (migration 22); the new file reaches
- *  phones ~15 min later. GitHub's own hourly schedule sometimes updates sooner. */
+ *  phones up to ~25 min later (job ~5 min + CDN cache 15 min). GitHub's own hourly schedule
+ *  sometimes updates sooner. */
 const PUBLISH_EVERY_S = 3 * 3600
-const PUBLISH_AFTER_S = 22 * 60
+const PUBLISH_AFTER_S = 32 * 60
 /** Next guaranteed publish after both now and the current file's time. */
 function nextPublish(now: number, fetchedS: number): number {
   const after = Math.max(now, fetchedS)

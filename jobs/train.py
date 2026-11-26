@@ -93,6 +93,9 @@ from jobs.explore import HISTORICAL, angle_diff, fetch_all, round_hour, simple_s
 
 JOB = "train"
 BUCKET = "models"
+# Model files are ~0.5-1 MB and a new one is saved every night (activated or not). Older than this
+# and not active = deleted (file + row), so storage stays far under the free 1 GB.
+KEEP_MODEL_DAYS = 7
 UTC = timezone.utc
 Row = dict[str, Any]
 
@@ -662,6 +665,34 @@ def save(db: Supabase, spot: Row, version: str, bundle: Row, metrics: Row,
         raise
 
 
+# ---------- pruning old models ----------
+
+def prune_models(db: Supabase, now: datetime, dry_run: bool) -> int:
+    """Delete models that aren't active and were trained more than KEEP_MODEL_DAYS ago: files
+    first (a general model's file is shared by several rows; it goes only when no kept row uses
+    it), then rows. A failure is retried the next night. Returns the number of rows removed."""
+    rows = http(f"{db.base}/models?select=id,trained_at,artifact_path,is_active&order=id", db.headers) or []
+    cutoff = now - timedelta(days=KEEP_MODEL_DAYS)
+    old = [r for r in rows if not r["is_active"] and ts(r["trained_at"]) < cutoff]
+    if not old:
+        return 0
+    kept_paths = {r["artifact_path"] for r in rows if r not in old}
+    paths = sorted({r["artifact_path"] for r in old if r["artifact_path"]} - kept_paths)
+    files = [f for p in paths for f in (p, p.rsplit(".", 1)[0] + ".json")]
+    if dry_run:
+        log.ok(JOB, f"pruning: would delete {len(old)} old models ({len(paths)} files + metrics)")
+        return len(old)
+    for i in range(0, len(files), 100):
+        delete_files(db, files[i:i + 100])
+    ids = [r["id"] for r in old]
+    for i in range(0, len(ids), 200):
+        http(f"{db.base}/models?id=in.({','.join(map(str, ids[i:i + 200]))})",
+             {**db.headers, "Prefer": "return=minimal"}, method="DELETE")
+    log.ok(JOB, f"pruning: deleted {len(old)} models older than {KEEP_MODEL_DAYS} days "
+                f"(not active), {len(paths)} model files")
+    return len(old)
+
+
 # ---------- one training (a spot's own model, or the general one) ----------
 
 def log_metrics(label: str, train: list[Row], test: list[Row], metrics: Row) -> None:
@@ -816,6 +847,13 @@ def main() -> int:
             except Exception as exc:
                 failed += [s["id"] for s in low]
                 log.fail(JOB, f"[general] {type(exc).__name__}: {exc}")
+
+    # Old unused models (storage). Runs only for a whole run (not --spot), never fails the job.
+    if not args.spot:
+        try:
+            prune_models(db, now, args.dry_run)
+        except Exception as exc:
+            log.warn(JOB, f"pruning old models failed ({type(exc).__name__}: {exc}); retried next night")
     return 1 if failed else 0
 
 
