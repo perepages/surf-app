@@ -163,6 +163,15 @@ export class RatingError extends Error {
 
 /** Turns a database refusal into something a surfer can act on. */
 function explain(raw: string): RatingError {
+  // Per network (migration 23): checked first, its code also contains "rate_limit".
+  if (raw.includes('rate_limit_ip')) {
+    return new RatingError(
+      'limit',
+      raw.includes('per hour')
+        ? 'Lots of ratings came from your network in the last hour. Thanks! Please try again a bit later.'
+        : 'Lots of ratings came from your network today. Thanks! Please try again tomorrow.',
+    )
+  }
   if (raw.includes('rate_limit')) {
     return new RatingError('limit', 'You’ve already sent 3 ratings in the last 24 hours. Thanks! Try again tomorrow.')
   }

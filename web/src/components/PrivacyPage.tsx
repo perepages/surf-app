@@ -32,6 +32,7 @@ export function PrivacyPage() {
           </li>
           <li>The app version.</li>
           <li>A random device id, created on this phone. It isn’t linked to you; it lets us limit each phone to 3 ratings a day and spot spam.</li>
+          <li>To stop one network from sending lots of ratings, the database keeps a scrambled code made from your IP address (not the address itself, and not linked to your rating) for 48 hours, then deletes it.</li>
           <li>“At the beach: yes”, only if you tapped the location check and your phone found it was within 3 km of the beach.</li>
         </ul>
       </Section>

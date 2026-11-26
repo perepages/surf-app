@@ -1142,6 +1142,23 @@ Money
   snapshots to users** (bucket stays private; serving them through Supabase's CDN needs the
   Windy terms decision for public display, open since step 24). Snapshots already stored as
   .jpg stay until the 7-day cleanup removes them.
+- [x] Step 46 (2026-11-26, scaling item 4): per-network rating limit inside the database (my
+  rule: whatever costs least; no new server, service or library). Tested first with a
+  temporary function: Supabase is behind Cloudflare, which writes `cf-connecting-ip`; a client
+  sending its own gets HTTP 403 (can't be faked), while `x-forwarded-for` keeps a faked value in
+  front (not used). Migration `...0023_ratings_ip_limit` (applied 2026-11-26 by me):
+  `ratings_rate_limit()` keeps the 3/device/24 h rule and adds, for community ratings, max 6 per
+  hour and 15 per 24 h per IP (constants `ip_per_hour` / `ip_per_day`; generous because phone
+  networks share IPs). Stores only `sha256(salt | IP)` cut to 16 bytes + time in
+  `rating_ip_log` (not linked to the rating, rows > 48 h deleted by the trigger);
+  `rating_ip_salt` = random secret made once; no public access to either (service key can only
+  read the log, for /admin). No header = IP limit skipped. Also dropped the probe `zz_ip_probe`.
+  App: `explain()` in `lib/ratings.ts` shows "Lots of ratings came from your network in the last
+  hour / today…"; privacy page mentions the scrambled IP code kept 48 h. Live test (throwaway
+  active spot `zz-test`, public key, 7 fake devices): 6 accepted, 7th refused
+  (`rate_limit_ip ... per hour`); log has only hashes; public gets 401 on log + salt; test
+  spot + ratings deleted (the 6 log rows expire on their own). Limits: someone with many IPs
+  (VPNs, botnets) still gets through; a captcha would be the next step if that ever happens.
 - [ ] Barcelona city beach cams (found 2026-11-22): `https://www.barcelona.cat/sites/default/files/clabsa/camaraN.jpg`,
   N = 1-6, shown on barcelona.cat "Banys i platges": 1 + 2 Somorrostro (1 looks SW over
   Barceloneta), 3 + 4 Port Olímpic, 5 Nova Icària, 6 Bogatell. 1624x1234 or 2452x2056, people on
