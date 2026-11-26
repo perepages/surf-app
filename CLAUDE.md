@@ -1183,6 +1183,14 @@ Money
     panel at phone size with a stubbed answer incl. a faked 85% (red + warning), no console
     errors. `tsc` passes. Not in the panel: Supabase's 2 GB disk (read-only at 95%; includes WAL,
     not readable from SQL).
+- [x] Step 48 (2026-11-26, scaling item 6): free-limit estimate in `docs/free-plan-limits.md`
+  (limits checked on the providers' pages; per-visit sizes measured on the prod build + live
+  database; assumptions listed). First limits: **model files in storage** (never deleted: 80%
+  of 1 GB in ~4-27 months once models train, whatever the users), **Vercel CDN requests** at
+  ~4,650 daily users, **Supabase egress** at ~5,900 (worst case ~900 if counted uncompressed),
+  **database** in ~7 months at 10,000 daily users. Open-Meteo stays at ~2% (no longer depends on
+  users). Cheapest fixes listed in order (prune models; AI scores + report summary in the
+  forecast files; CDN 5 -> 15 min; ...): **none built yet, my decision**.
 - [ ] Barcelona city beach cams (found 2026-11-22): `https://www.barcelona.cat/sites/default/files/clabsa/camaraN.jpg`,
   N = 1-6, shown on barcelona.cat "Banys i platges": 1 + 2 Somorrostro (1 looks SW over
   Barceloneta), 3 + 4 Port Olímpic, 5 Nova Icària, 6 Bogatell. 1624x1234 or 2452x2056, people on
