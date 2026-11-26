@@ -1009,8 +1009,8 @@ Money
   `web/dist` scanned: no keys. Live confirmed: isitworthsurf.vercel.app serves the 0.5.0 bundle
   (contains physics-v1). Not yet checked on a real phone; first scheduled runs on the new code
   not yet seen.
-- [x] Step 40 (2026-11-26): spot page redesign, committed on local branch `demo/new-design`
-  (from `test-preview`), **not pushed** (not on `main`, so not live). Presentation only: same scores, APIs and rating
+- [x] Step 40 (2026-11-26): spot page redesign, **released 2026-11-26 as app 0.6.0** (`main`
+  fast-forwarded to `demo/new-design` and pushed). Presentation only: same scores, APIs and rating
   insert. Reference in `designs/` (DESIGN_HANDOFF.md, mockup, photo originals; local only, not committed).
   - New page `web/src/spot/SpotScreen.tsx` replaces the old one (removed: `Verdict`,
     `ScoreDetails`, `TodayReports`, `HourSheet`, `DayPlan`). Top bar: logo (`spot/Logo.tsx`,
@@ -1043,7 +1043,7 @@ Money
     inline SVG icons (`spot/Icons.tsx`, no emoji). Desktop max 1280 px.
   - Checked in the dev app at 390 and 1280 px (all 5 spots, 3 languages, sheets opened, nothing
     sent); `tsc`, lint, build pass. Not checked on a real phone. White text on purple (score 5
-    hour bar) is ~4.2:1. Bump `web/package.json` (0.6.0) when releasing.
+    hour bar) is ~4.2:1.
 - [ ] Barcelona city beach cams (found 2026-11-22): `https://www.barcelona.cat/sites/default/files/clabsa/camaraN.jpg`,
   N = 1-6, shown on barcelona.cat "Banys i platges": 1 + 2 Somorrostro (1 looks SW over
   Barceloneta), 3 + 4 Port Olímpic, 5 Nova Icària, 6 Bogatell. 1624x1234 or 2452x2056, people on
