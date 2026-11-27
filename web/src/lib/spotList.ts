@@ -61,27 +61,52 @@ async function loadActiveSpots(signal: AbortSignal): Promise<Spot[]> {
 // ---------- forecast: all spots in one file ----------
 
 /** The hours around now for every spot in the file (the history the score needs + a day ahead). */
-async function loadHours(signal: AbortSignal): Promise<{ hours: Record<string, HourConditions[]>; fetchedAt: number }> {
-  const file = await getForecastFile<{ fetchedAt: string; spots: Record<string, FilePart> }>(SPOT_LIST_URL, signal)
-  const hours: Record<string, HourConditions[]> = {}
-  for (const [id, part] of Object.entries(file.spots)) hours[id] = decodeHours(part)
-  return { hours, fetchedAt: Date.parse(file.fetchedAt) || Date.now() }
+/** The home answer's other public data (web/api/forecast.ts homeExtras); any part may be missing. */
+interface HomeExtras {
+  spots?: SpotRow[]
+  ai?: AiRow[]
+  crowd?: Record<string, { count: number; crowd: Crowd | null }>
 }
 
-// ---------- Supabase: AI scores + crowd ----------
+async function loadHours(signal: AbortSignal): Promise<{ hours: Record<string, HourConditions[]>; fetchedAt: number; extras: HomeExtras }> {
+  const file = await getForecastFile<{ fetchedAt: string; spots: Record<string, FilePart>; extras?: HomeExtras }>(SPOT_LIST_URL, signal)
+  const hours: Record<string, HourConditions[]> = {}
+  for (const [id, part] of Object.entries(file.spots)) hours[id] = decodeHours(part)
+  return { hours, fetchedAt: Date.parse(file.fetchedAt) || Date.now(), extras: file.extras ?? {} }
+}
+
+// ---------- AI scores + crowd (from the extras, else from Supabase) ----------
+
+interface AiRow {
+  spot_id: string
+  valid_at: string
+  ai_score: number
+  ai_waves: number | null
+  ai_shape: number | null
+}
+
+function aiFromRows(rows: AiRow[]): SpotListData['ai'] {
+  const out: SpotListData['ai'] = {}
+  for (const r of rows) {
+    const validAt = Math.round(Date.parse(r.valid_at) / 1000)
+    ;(out[r.spot_id] ??= {})[validAt] = {
+      validAt,
+      aiScore: r.ai_score,
+      aiWaves: r.ai_waves,
+      aiShape: r.ai_shape,
+      reason: null,
+      modelVersion: null,
+    }
+  }
+  return out
+}
 
 async function loadAi(spots: Spot[], signal: AbortSignal): Promise<SpotListData['ai'] | null> {
   if (!supabaseConfigured || !spots.length) return {}
   const now = Date.now() / 1000
   const iso = (u: number) => encodeURIComponent(new Date(u * 1000).toISOString())
   try {
-    const rows = await selectRows<{
-      spot_id: string
-      valid_at: string
-      ai_score: number
-      ai_waves: number | null
-      ai_shape: number | null
-    }>(
+    const rows = await selectRows<AiRow>(
       'predictions',
       [
         'select=spot_id,valid_at,ai_score,ai_waves,ai_shape',
@@ -92,19 +117,7 @@ async function loadAi(spots: Spot[], signal: AbortSignal): Promise<SpotListData[
       ].join('&'),
       signal,
     )
-    const out: SpotListData['ai'] = {}
-    for (const r of rows) {
-      const validAt = Math.round(Date.parse(r.valid_at) / 1000)
-      ;(out[r.spot_id] ??= {})[validAt] = {
-        validAt,
-        aiScore: r.ai_score,
-        aiWaves: r.ai_waves,
-        aiShape: r.ai_shape,
-        reason: null,
-        modelVersion: null,
-      }
-    }
-    return out
+    return aiFromRows(rows)
   } catch (err) {
     if (signal.aborted) throw err
     return null // keep the last copy
@@ -180,26 +193,50 @@ export function useSpotList() {
     const saved = readLastGood<SpotListData>(SAVED_KEY)
     const known = saved?.spots ?? readLastGood<Spot[]>('spots:list') ?? Object.values(FALLBACK_SPOTS)
 
-    const spotsP = supabaseConfigured ? loadActiveSpots(signal) : Promise.resolve(known)
-    const reuse = saved != null && fresh(saved)
-    const hoursP = reuse ? Promise.resolve({ hours: saved.hours, fetchedAt: saved.fetchedAt }) : loadHours(signal)
-    const [spotsR, hoursR, aiR, crowdR] = await Promise.allSettled([
-      spotsP,
-      hoursP,
-      spotsP.catch(() => known).then((s) => loadAi(s, signal)),
-      spotsP.catch(() => known).then((s) => loadCrowd(s, signal)),
+    // Downloaded less than 15 min ago (and covers now): nothing to fetch.
+    if (saved && fresh(saved)) {
+      setState((prev) => (prev.status === 'ready' ? prev : { status: 'ready', data: saved, stale: isOld(saved), refreshing: false }))
+      return
+    }
+
+    // One download: every spot's hours + the extras (spot list, AI scores, crowd). Supabase is
+    // read directly only for a part the extras lack (or when the download failed).
+    let file: Awaited<ReturnType<typeof loadHours>> | null = null
+    let fileError: unknown = null
+    try {
+      file = await loadHours(signal)
+    } catch (err) {
+      if (signal.aborted) return
+      fileError = err
+    }
+    const x = file?.extras ?? {}
+    let spots = known
+    let spotsLoaded = false
+    if (Array.isArray(x.spots)) {
+      spots = x.spots.map(spotFromRow)
+      spotsLoaded = true
+      for (const sp of spots) writeLastGood(`spot:${sp.id}`, sp)
+    } else if (supabaseConfigured) {
+      try {
+        spots = await loadActiveSpots(signal)
+        spotsLoaded = true
+      } catch {
+        if (signal.aborted) return
+      }
+    }
+    if (spotsLoaded) writeLastGood('spots:list', spots)
+    const [aiR, crowdR] = await Promise.allSettled([
+      Array.isArray(x.ai) ? Promise.resolve(aiFromRows(x.ai)) : loadAi(spots, signal),
+      x.crowd && typeof x.crowd === 'object' ? Promise.resolve(x.crowd) : loadCrowd(spots, signal),
     ])
     if (signal.aborted) return
 
-    const spots = spotsR.status === 'fulfilled' ? spotsR.value : known
-    if (spotsR.status === 'fulfilled') writeLastGood('spots:list', spots)
-    // The file has every active spot, so a spot list that differs from the saved one needs nothing more.
-    const hours = hoursR.status === 'fulfilled' ? hoursR.value.hours : (saved?.hours ?? null)
-    const fetchedAt = hoursR.status === 'fulfilled' ? hoursR.value.fetchedAt : (saved?.fetchedAt ?? 0)
-    const checkedAt = hoursR.status === 'fulfilled' && !reuse ? Date.now() : (saved?.checkedAt ?? 0)
+    const hours = file?.hours ?? saved?.hours ?? null
+    const fetchedAt = file?.fetchedAt ?? saved?.fetchedAt ?? 0
+    const checkedAt = file ? Date.now() : (saved?.checkedAt ?? 0)
 
     if (!hours) {
-      const reason = hoursR.status === 'rejected' ? hoursR.reason : null
+      const reason = fileError
       setState({
         status: 'error',
         message: !navigator.onLine

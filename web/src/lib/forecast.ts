@@ -4,6 +4,7 @@
 // "Weather data by Open-Meteo.com" (non-commercial use).
 // The last answer is kept in localStorage: reused for 15 minutes, and shown when offline.
 
+import type { SpotExtras } from './extras'
 import type { Spot } from './spot'
 
 import { CACHE_TTL_MS, FETCHED_AT_KEY, FILE_VERSION, OLD_AFTER_MS, forecastUrl } from './forecastRequest'
@@ -81,6 +82,8 @@ interface SpotFile extends FilePart {
   v: number
   spotId: string
   daily: { date: string[]; sunrise: (number | null)[]; sunset: (number | null)[] }
+  /** The page's other public data (web/api/forecast.ts); missing from older servers. */
+  extras?: SpotExtras
 }
 
 const NUMBER_FIELDS = [
@@ -142,8 +145,8 @@ export async function getForecastFile<T>(url: string, outer?: AbortSignal, prefe
   })
 }
 
-async function fetchFromServer(spot: Spot, signal?: AbortSignal): Promise<Forecast> {
-  const file = await getForecastFile<SpotFile>(forecastUrl(spot.id), signal, true)
+async function fetchFromServer(spotId: string, signal?: AbortSignal): Promise<{ forecast: Forecast; extras: SpotExtras }> {
+  const file = await getForecastFile<SpotFile>(forecastUrl(spotId), signal, true)
   const hours = decodeHours(file)
   const timezone = file.timezone || 'UTC'
   const dateFmt = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' })
@@ -165,14 +168,15 @@ async function fetchFromServer(spot: Spot, signal?: AbortSignal): Promise<Foreca
   const first = days.findIndex((d) => d.date >= today)
   const shown = first < 0 ? days : days.slice(0, first + SHOWN_DAYS)
 
-  return {
-    spotId: spot.id,
+  const forecast: Forecast = {
+    spotId,
     fetchedAt: Date.parse(file.fetchedAt) || Date.now(),
     checkedAt: Date.now(),
     timezone,
     marineModel: file.marineModel,
     days: shown,
   }
+  return { forecast, extras: file.extras ?? {} }
 }
 
 // ---------- cache (localStorage; can be unavailable, so every access is guarded) ----------
@@ -236,9 +240,13 @@ export function readCachedForecast(spot: Spot): Forecast | null {
   return last * 1000 > Date.now() ? f : null
 }
 
-/** Downloads the spot's file and saves it as the new last-known copy. */
-export async function fetchForecast(spot: Spot, signal?: AbortSignal): Promise<Forecast> {
-  const fresh = await fetchFromServer(spot, signal)
-  writeCache(spot, fresh)
-  return fresh
+/** Downloads the spot's file: the forecast + the page's other public data (`extras`). Not saved
+ *  yet: the caller saves it with saveForecast once it knows the spot (the extras may carry it). */
+export function downloadForecast(spotId: string, signal?: AbortSignal): Promise<{ forecast: Forecast; extras: SpotExtras }> {
+  return fetchFromServer(spotId, signal)
+}
+
+/** Saves a downloaded forecast as the spot's new last-known copy. */
+export function saveForecast(spot: Spot, f: Forecast): void {
+  writeCache(spot, f)
 }

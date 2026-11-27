@@ -1230,6 +1230,28 @@ Money
     daily users; it only pays off if Supabase counts egress uncompressed (then its ceiling is
     ~900). The cheap way is to merge them into the `/api/forecast` answer (no extra requests,
     CDN 10 min), a bigger change to how the app loads data: to decide with me.
+- [x] Step 51 (2026-11-27, my go-ahead): fix 2 the efficient way, released as **app 0.7.2**.
+  - `web/api/forecast.ts`: both answers carry `extras`, read in parallel with the file using the
+    PUBLIC key (`VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY`, so never more than the app may
+    see): spot page = `spot` row, `ai` (predictions -15 d..+5 d with ai_waves), `reports`
+    (spot_reports_today), `daily` (spot_daily_ratings 14 d), `model` (spot_model_info 14 d);
+    home = `spots` (active), `ai` (-2 h..+5 h), `crowd` ({count, crowd} per spot). A part whose
+    read fails is left out (logged). `CDN_FRESH_S` 900 -> 600 (reports shouldn't lag > 10 min).
+  - App: `lib/extras.ts` (publish/subscribe per spot, `EXTRAS_WAIT_MS` 10 s, `EXTRAS_FRESH_MS`
+    20 min). `useSpotForecast`: a fresh saved forecast = no network at all; else one download,
+    spot + AI from the extras (Supabase only for a missing part), then `publishExtras`.
+    `useReports` / `useModelInfo`: take their parts from the extras; read Supabase directly only
+    if the part is missing, nothing arrived within 10 s and the saved copy is old, or (reports)
+    right after a rating, after which the CDN's older copy is ignored for 20 min. Their own 15-min
+    timers are gone (the forecast's re-download drives them). Home `useSpotList`: same, from the
+    home extras. Forecast download/save split (`downloadForecast` / `saveForecast`);
+    `aiFromRows` shared.
+  - Tested in the dev app at phone size against the live database: home 0 Supabase requests (was
+    7), spot page 0 after waiting past the 10 s fallback (was 5); with the extras stripped from
+    the answer: exactly the old 5 reads; after a (stubbed) rating: reports + daily read directly
+    (fake send removed from that browser's 3-a-day log). Server: real extras for home + spot; a
+    wrong public key still serves the forecast with empty extras. `docs/free-plan-limits.md`
+    updated (Supabase egress no longer grows with visitors).
 - [ ] Barcelona city beach cams (found 2026-11-22): `https://www.barcelona.cat/sites/default/files/clabsa/camaraN.jpg`,
   N = 1-6, shown on barcelona.cat "Banys i platges": 1 + 2 Somorrostro (1 looks SW over
   Barceloneta), 3 + 4 Port Olímpic, 5 Nova Icària, 6 Bogatell. 1624x1234 or 2452x2056, people on

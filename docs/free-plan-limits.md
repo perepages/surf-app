@@ -1,4 +1,4 @@
-# When do the free plans run out? (estimate, 2026-11-26)
+# When do the free plans run out? (estimate, 2026-11-26; updated for 0.7.2 on 2026-11-27)
 
 Scaling item 6. Limits were checked on the providers' pages on 2026-11-26. Per-visit sizes were
 **measured** on the production build (app 0.6.1 plus the unreleased items 1–5: commits fecf019,
@@ -49,9 +49,9 @@ egress ~0.85 MB (uncompressed worst case ~5.5 MB), database +~4.5 KB of ratings 
 
 | Limit | 100 DAU | 1,000 DAU | 10,000 DAU | Runs out at |
 |---|---|---|---|---|
-| **Supabase storage (models)** | **80% in ~4–27 months** | same | same | not about users: nightly model files are never deleted. Starts once ratings exist (a few weeks at 100 DAU) |
+| Supabase storage | ~0% | ~0% | ~0% | fixed in 0.7.0 (unused models deleted after 7 days): forecast files + 7 days of cam images + ≤ ~8 models ≈ 10 MB |
 | **Vercel CDN requests** (1M/month) | 2% | 22% | **215% (used up by about day 14 of each month)** | **~4,650 DAU** (80% at ~3,700) |
-| **Supabase egress** (5 GB/month) | 2% | 17% (worst case 110%) | **170% (used up by about day 18)** | **~5,900 DAU** (80% at ~4,700); worst case ~900 DAU |
+| Supabase egress (5 GB/month) | <1% | ~2% | ~10% | **since 0.7.2 (fix 2) mostly not about users**: the page data rides in the CDN-cached forecast answer, so Supabase sends it ~once per 10 min per region (~0.2–0.3 GB/month); per visit only the visit counter (~0.7 KB) and the reads right after a rating. Before: ~5,900 DAU (worst case ~900) |
 | **Supabase database** (500 MB) | 80% in ~7.5 years | 80% in ~3.6 years | **80% in ~7 months** | ratings: ~55 KB a year per daily user |
 | Vercel data transfer (100 GB) | <1% | 3% | 27% | ~38,000 DAU |
 | Vercel function calls (1M) | <5% | ~10% | ~10% | not about users: only CDN refreshes (≤ ~1,700/day/region) |
@@ -65,13 +65,14 @@ gets slower with thousands of alerts (sent one by one).
 
 ## Cheapest fixes, in order (none needs a new service)
 
-1. **Delete unused model files** (keep the active one + the last 7 nights): storage stops
-   growing. Small change in `jobs/train.py`.
-2. **Serve the AI scores and today's report summary through the forecast files** (written by the
-   job, cached by Vercel) instead of reading Supabase on every visit. Supabase egress per visit
-   drops to ~1–2 KB, so it lasts past ~25,000 DAU (and the uncompressed worst case goes away).
-3. **Vercel CDN cache 5 → 15 minutes** for the forecast files (`CDN_FRESH_S`): function calls and
-   origin transfer ÷3. Forecasts reach phones up to 15 min after the job instead of 5.
+1. ✅ Done in 0.7.0: **delete unused model files** (keep the active one + the last 7 nights).
+2. ✅ Done in 0.7.2: **the AI scores, today's reports, 14-day ratings, model info and the spot
+   row(s) ride along in the `/api/forecast` answer** (`extras`, read with the public key, CDN 10
+   min). No extra Vercel requests; Supabase is read directly only when a part is missing or right
+   after a rating. Measured in the dev app: 0 Supabase requests on the home page and on a spot
+   page (was 7 and 5).
+3. ✅ Done in 0.7.0, now **10 minutes** (0.7.2, because the answer also carries today's reports):
+   function calls and origin transfer ÷2 compared with 5 min.
 4. **Vercel CDN requests** are the real ceiling on Hobby (~4,000–5,000 DAU). Before that point:
    longer re-check times in the app (15 → 30 min) gain ~20%. Beyond it, the options are a paid
    plan or moving the static site to a host without a request limit (e.g. Cloudflare Pages,

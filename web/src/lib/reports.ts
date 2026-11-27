@@ -2,6 +2,7 @@
 // The raw ratings stay private; these return only counts, averages and recent comments.
 
 import { useEffect, useState } from 'react'
+import { EXTRAS_FRESH_MS, EXTRAS_WAIT_MS, onExtras } from './extras'
 import { readLastGood, writeLastGood } from './lastGood'
 import { rpc, supabaseConfigured } from './supabase'
 import type { Crowd, WaveSize } from './ratings'
@@ -22,7 +23,6 @@ export interface DailyRating {
 }
 
 export const CHART_DAYS = 14
-const REFRESH_EVERY_MS = 15 * 60 * 1000
 
 interface TodayRow {
   count: number
@@ -32,8 +32,7 @@ interface TodayRow {
   comments: { comment: string; overall: number; surfed_at: string }[]
 }
 
-async function loadToday(spotId: string, signal: AbortSignal): Promise<TodayReports> {
-  const r = await rpc<TodayRow>('spot_reports_today', { p_spot_id: spotId }, signal)
+function toToday(r: TodayRow): TodayReports {
   return {
     count: r.count,
     avgOverall: r.avg_overall == null ? null : Number(r.avg_overall),
@@ -43,13 +42,15 @@ async function loadToday(spotId: string, signal: AbortSignal): Promise<TodayRepo
   }
 }
 
+type DailyRow = { day: string; reports: number; avg_overall: number | string }
+const toDaily = (rows: DailyRow[]): DailyRating[] => rows.map((r) => ({ day: r.day, reports: r.reports, avgOverall: Number(r.avg_overall) }))
+
+async function loadToday(spotId: string, signal: AbortSignal): Promise<TodayReports> {
+  return toToday(await rpc<TodayRow>('spot_reports_today', { p_spot_id: spotId }, signal))
+}
+
 async function loadDaily(spotId: string, signal: AbortSignal): Promise<DailyRating[]> {
-  const rows = await rpc<{ day: string; reports: number; avg_overall: number | string }[]>(
-    'spot_daily_ratings',
-    { p_spot_id: spotId, p_days: CHART_DAYS },
-    signal,
-  )
-  return rows.map((r) => ({ day: r.day, reports: r.reports, avgOverall: Number(r.avg_overall) }))
+  return toDaily(await rpc<DailyRow[]>('spot_daily_ratings', { p_spot_id: spotId, p_days: CHART_DAYS }, signal))
 }
 
 export type ReportsState =
@@ -58,16 +59,18 @@ export type ReportsState =
   | { status: 'unavailable' }
   | { status: 'ready'; today: TodayReports; daily: DailyRating[]; savedOn: string }
 
-type Saved = { today: TodayReports; daily: DailyRating[]; savedOn: string }
+type Saved = { today: TodayReports; daily: DailyRating[]; savedOn: string; savedAt?: number }
 
 /** A saved copy is only used on the day it was saved: "today's reports" from yesterday would mislead. */
 const todayKey = () => new Date().toDateString()
 
 /**
- * Loads both summaries, starting from the last saved copy (instant, and works offline);
- * `refreshKey` changes after the user sends a rating, so it shows up. Also reloads when the
- * phone comes back online and, while the app is on screen, every 15 minutes (an app left open
- * keeps up, also across midnight).
+ * Both summaries, starting from the last saved copy (instant, and works offline). New copies
+ * normally arrive with the forecast (its `extras`, lib/extras.ts), which the forecast hook
+ * re-downloads every 15 min while the app is on screen and when back online. Supabase is read
+ * directly only when the extras lack them, when none arrived within EXTRAS_WAIT_MS and the saved
+ * copy is old, or after the user sent a rating (`refreshKey` changes), so it shows at once; the
+ * CDN's copy (up to 10 min old) is then ignored for a while so it can't hide the new rating.
  */
 export function useReports(spotId: string, refreshKey: number): ReportsState {
   const [state, setState] = useState<ReportsState>(() => {
@@ -76,33 +79,50 @@ export function useReports(spotId: string, refreshKey: number): ReportsState {
       ? { status: 'ready', today: saved.today, daily: saved.daily, savedOn: saved.savedOn }
       : { status: 'loading' }
   })
-  const [tick, setTick] = useState(0)
-  useEffect(() => {
-    const bump = () => setTick((t) => t + 1)
-    const timer = setInterval(() => document.visibilityState === 'visible' && bump(), REFRESH_EVERY_MS)
-    window.addEventListener('online', bump)
-    return () => {
-      clearInterval(timer)
-      window.removeEventListener('online', bump)
-    }
-  }, [])
   useEffect(() => {
     if (!supabaseConfigured) return
     const ac = new AbortController()
-    Promise.all([loadToday(spotId, ac.signal), loadDaily(spotId, ac.signal)])
-      .then(([today, daily]) => {
-        const savedOn = todayKey()
-        writeLastGood<Saved>(`reports:${spotId}`, { today, daily, savedOn })
-        setState({ status: 'ready', today, daily, savedOn })
-      })
-      .catch((err) => {
-        if (ac.signal.aborted) return
-        console.warn('Could not load surfer reports', err)
-        // Keep showing the copy on screen, unless it is from an earlier day (the app was left open
-        // overnight): yesterday's "today" would mislead.
-        setState((prev) => (prev.status === 'ready' && prev.savedOn === todayKey() ? prev : { status: 'unavailable' }))
-      })
-    return () => ac.abort()
-  }, [spotId, refreshKey, tick])
+    const save = (today: TodayReports, daily: DailyRating[]) => {
+      const savedOn = todayKey()
+      writeLastGood<Saved>(`reports:${spotId}`, { today, daily, savedOn, savedAt: Date.now() })
+      setState({ status: 'ready', today, daily, savedOn })
+    }
+    let readDirect = false
+    let ignoreExtrasUntil = 0
+    const direct = () => {
+      if (readDirect) return
+      readDirect = true
+      Promise.all([loadToday(spotId, ac.signal), loadDaily(spotId, ac.signal)])
+        .then(([today, daily]) => save(today, daily))
+        .catch((err) => {
+          if (ac.signal.aborted) return
+          console.warn('Could not load surfer reports', err)
+          // Keep showing the copy on screen, unless it is from an earlier day (the app was left open
+          // overnight): yesterday's "today" would mislead.
+          setState((prev) => (prev.status === 'ready' && prev.savedOn === todayKey() ? prev : { status: 'unavailable' }))
+        })
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const off = onExtras(spotId, (x) => {
+      clearTimeout(timer)
+      if (Date.now() < ignoreExtrasUntil) return
+      if (x.reports && Array.isArray(x.daily)) save(toToday(x.reports as TodayRow), toDaily(x.daily as DailyRow[]))
+      else direct()
+    })
+    if (refreshKey > 0) {
+      // Just rated: straight from the database, and the CDN's older copy can't overwrite it.
+      ignoreExtrasUntil = Date.now() + EXTRAS_FRESH_MS
+      direct()
+    } else {
+      const saved = readLastGood<Saved>(`reports:${spotId}`)
+      const fresh = saved?.savedOn === todayKey() && Date.now() - (saved.savedAt ?? 0) < EXTRAS_FRESH_MS
+      if (!fresh) timer = setTimeout(direct, EXTRAS_WAIT_MS)
+    }
+    return () => {
+      off()
+      clearTimeout(timer)
+      ac.abort()
+    }
+  }, [spotId, refreshKey])
   return supabaseConfigured ? state : { status: 'unavailable' }
 }

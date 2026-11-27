@@ -3,6 +3,7 @@
 // Only counts come back; ratings and model files stay private.
 
 import { useEffect, useState } from 'react'
+import { EXTRAS_WAIT_MS, extrasRecent, onExtras } from './extras'
 import { readLastGood, writeLastGood } from './lastGood'
 import { CHART_DAYS } from './reports'
 import { rpc, supabaseConfigured } from './supabase'
@@ -36,10 +37,7 @@ interface Row {
   simple_closer: number
 }
 
-const REFRESH_EVERY_MS = 15 * 60 * 1000
-
-async function load(spotId: string, signal: AbortSignal): Promise<ModelInfo> {
-  const r = await rpc<Row>('spot_model_info', { p_spot_id: spotId, p_days: CHART_DAYS }, signal)
+function fromRow(r: Row): ModelInfo {
   return {
     active: r.active,
     version: r.version,
@@ -53,36 +51,48 @@ async function load(spotId: string, signal: AbortSignal): Promise<ModelInfo> {
   }
 }
 
+async function load(spotId: string, signal: AbortSignal): Promise<ModelInfo> {
+  return fromRow(await rpc<Row>('spot_model_info', { p_spot_id: spotId, p_days: CHART_DAYS }, signal))
+}
+
 /**
  * The spot's model info, starting from the last saved copy (instant, works offline). Null while
  * unknown, or when the function isn't there (migration 12 not applied): the app then just
- * doesn't show these lines. Reloads when back online and every 15 minutes while on screen.
+ * doesn't show these lines. New copies arrive with the forecast (`extras`, lib/extras.ts); read
+ * from Supabase directly only when the extras lack it or none arrived within EXTRAS_WAIT_MS.
  */
 export function useModelInfo(spotId: string): ModelInfo | null {
   const [info, setInfo] = useState<ModelInfo | null>(() => readLastGood<ModelInfo>(`model:${spotId}`))
-  const [tick, setTick] = useState(0)
-  useEffect(() => {
-    const bump = () => setTick((t) => t + 1)
-    const timer = setInterval(() => document.visibilityState === 'visible' && bump(), REFRESH_EVERY_MS)
-    window.addEventListener('online', bump)
-    return () => {
-      clearInterval(timer)
-      window.removeEventListener('online', bump)
-    }
-  }, [])
   useEffect(() => {
     if (!supabaseConfigured) return
     const ac = new AbortController()
-    load(spotId, ac.signal)
-      .then((i) => {
-        writeLastGood(`model:${spotId}`, i)
-        setInfo(i)
-      })
-      .catch((err) => {
-        if (!ac.signal.aborted) console.warn('Could not load model info, keeping the last copy', err)
-      })
-    return () => ac.abort()
-  }, [spotId, tick])
+    let readDirect = false
+    const keep = (i: ModelInfo) => {
+      writeLastGood(`model:${spotId}`, i)
+      setInfo(i)
+    }
+    const direct = () => {
+      if (readDirect) return
+      readDirect = true
+      load(spotId, ac.signal)
+        .then(keep)
+        .catch((err) => {
+          if (!ac.signal.aborted) console.warn('Could not load model info, keeping the last copy', err)
+        })
+    }
+    // A copy saved with a forecast downloaded minutes ago is current: no read needed.
+    const timer = readLastGood<ModelInfo>(`model:${spotId}`) && extrasRecent(spotId) ? undefined : setTimeout(direct, EXTRAS_WAIT_MS)
+    const off = onExtras(spotId, (x) => {
+      clearTimeout(timer)
+      if (x.model) keep(fromRow(x.model as Row))
+      else direct()
+    })
+    return () => {
+      off()
+      clearTimeout(timer)
+      ac.abort()
+    }
+  }, [spotId])
   return info
 }
 

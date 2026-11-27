@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CACHE_TTL_MS } from './lib/forecastRequest'
 import { readLastGood, writeLastGood } from './lib/lastGood'
-import { fetchForecast, isFresh, isOld, readCachedForecast, type Forecast } from './lib/forecast'
-import { getAiPredictions, type AiPrediction } from './lib/predictions'
-import { FALLBACK_SPOTS, loadSpot, type Spot } from './lib/spot'
+import { publishExtras } from './lib/extras'
+import { downloadForecast, isFresh, isOld, readCachedForecast, saveForecast, type Forecast } from './lib/forecast'
+import { aiFromRows, getAiPredictions, type AiPrediction } from './lib/predictions'
+import { FALLBACK_SPOTS, loadSpot, spotFromRow, type Spot, type SpotRow } from './lib/spot'
 
 export type SpotForecastState =
   | { status: 'loading' }
@@ -73,65 +74,60 @@ export function useSpotForecast(spotId: string) {
     const cachedAi = saved.status === 'ready' ? saved.ai : new Map<number, AiPrediction>()
     const needsForecast = !cached || !isFresh(cached)
 
-    // 2. Refresh everything in parallel.
+    // 2. The saved forecast is fresh: nothing to download (spot + AI scores were saved with it).
+    if (!needsForecast && cached && knownSpot) {
+      setState((prev) => (prev.status === 'ready' ? prev : { status: 'ready', spot: knownSpot, forecast: cached, ai: cachedAi, stale: isOld(cached), refreshing: false }))
+      return
+    }
+
+    // 3. One download: the forecast + the page's other public data (extras). The spot row and AI
+    //    scores come from the extras; only a part that's missing is read from Supabase directly.
     const nowS = Date.now() / 1000
-    const spotP = loadSpot(spotId, signal).then((s) => {
-      writeLastGood(`spot:${spotId}`, s)
-      return s
-    })
-    const aiP = getAiPredictions(spotId, nowS - 15 * DAY_S, nowS + 5 * DAY_S, signal).then((m) => {
-      if (m) writeLastGood(`ai:${spotId}`, [...m])
-      return m
-    })
-    const forecastP = (async () => {
-      if (!needsForecast && cached) return cached
-      const first = knownSpot ?? (await spotP)
-      return fetchForecast(first, signal)
-    })()
-
-    // First visit (nothing saved): show the forecast the moment it arrives; the AI scores and
-    // the spot from the database follow without holding up the first screen.
-    if (!cached && knownSpot) {
-      forecastP
-        .then((f) => {
-          if (signal.aborted) return
-          setState((prev) =>
-            prev.status === 'ready' ? prev : { status: 'ready', spot: knownSpot, forecast: f, ai: cachedAi, stale: false, refreshing: false },
-          )
-        })
-        .catch(() => {})
-    }
-
-    const [spotR, aiR, forecastR] = await Promise.allSettled([spotP, aiP, forecastP])
-    if (signal.aborted) return
-
-    const loadedSpot = spotR.status === 'fulfilled' ? spotR.value : knownSpot
-    const spot = loadedSpot && knownSpot && sameSpot(loadedSpot, knownSpot) ? knownSpot : loadedSpot
-    let forecast = forecastR.status === 'fulfilled' ? forecastR.value : cached
-    // The database moved the spot: the forecast must be for the new coordinates.
-    if (spot && knownSpot && forecast && (spot.lat !== knownSpot.lat || spot.lon !== knownSpot.lon)) {
-      forecast = await fetchForecast(spot, signal).catch(() => forecast)
+    let downloaded: Awaited<ReturnType<typeof downloadForecast>> | null = null
+    let downloadError: unknown = null
+    try {
+      downloaded = await downloadForecast(spotId, signal)
+    } catch (err) {
       if (signal.aborted) return
+      downloadError = err
     }
-    const loadedAi = aiR.status === 'fulfilled' && aiR.value ? aiR.value : cachedAi
-    const ai = sameAi(loadedAi, cachedAi) ? cachedAi : loadedAi
+    if (signal.aborted) return
+    const extras = downloaded?.extras ?? {}
 
-    if (spot && forecast) {
+    const spotRow = extras.spot as SpotRow | null | undefined
+    let spot: Spot | null = spotRow ? spotFromRow(spotRow) : null
+    const aiP: Promise<Map<number, AiPrediction> | null> = Array.isArray(extras.ai)
+      ? Promise.resolve(aiFromRows(extras.ai))
+      : getAiPredictions(spotId, nowS - 15 * DAY_S, nowS + 5 * DAY_S, signal)
+    if (!spot) spot = await loadSpot(spotId, signal).catch(() => knownSpot)
+    const loadedAi = await aiP
+    if (signal.aborted) return
+    if (spot) writeLastGood(`spot:${spotId}`, spot)
+    if (loadedAi) writeLastGood(`ai:${spotId}`, [...loadedAi])
+    if (downloaded && spot) saveForecast(spot, downloaded.forecast)
+    // Reports and model info pick their parts up from here (lib/extras.ts).
+    if (downloaded) publishExtras(spotId, extras)
+
+    const sameAsKnown = spot && knownSpot && sameSpot(spot, knownSpot)
+    const finalSpot = sameAsKnown ? knownSpot : spot
+    const forecast = downloaded?.forecast ?? cached
+    const ai = loadedAi && !sameAi(loadedAi, cachedAi) ? loadedAi : cachedAi
+
+    if (finalSpot && forecast) {
       const stale = !isFresh(forecast) || isOld(forecast)
       setState((prev) =>
-        prev.status === 'ready' && prev.spot === spot && prev.forecast === forecast && prev.ai === ai && prev.stale === stale && !prev.refreshing
+        prev.status === 'ready' && prev.spot === finalSpot && prev.forecast === forecast && prev.ai === ai && prev.stale === stale && !prev.refreshing
           ? prev // nothing new: no re-render
-          : { status: 'ready', spot, forecast, ai, stale, refreshing: false },
+          : { status: 'ready', spot: finalSpot, forecast, ai, stale, refreshing: false },
       )
     } else {
-      const reason = forecastR.status === 'rejected' ? forecastR.reason : spotR.status === 'rejected' ? spotR.reason : null
       setState({
         status: 'error',
         message: !navigator.onLine
           ? 'You’re offline and there’s no saved forecast on this phone yet.'
-          : reason instanceof Error
-            ? reason.message
-            : String(reason),
+          : downloadError instanceof Error
+            ? downloadError.message
+            : String(downloadError ?? 'This spot couldn’t be loaded.'),
       })
     }
   }, [spotId])

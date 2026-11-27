@@ -23,6 +23,23 @@ interface PredictionRow {
   model_version: string | null
 }
 
+/** Rows as the database returns them (also inside the forecast answer's extras) -> map. */
+export function aiFromRows(rows: unknown[]): Map<number, AiPrediction> {
+  const out = new Map<number, AiPrediction>()
+  for (const r of rows as PredictionRow[]) {
+    const validAt = Math.round(Date.parse(r.valid_at) / 1000)
+    out.set(validAt, {
+      validAt,
+      aiScore: r.ai_score,
+      aiWaves: r.ai_waves,
+      aiShape: r.ai_shape,
+      reason: r.reason,
+      modelVersion: r.model_version,
+    })
+  }
+  return out
+}
+
 /**
  * Map of unix seconds -> prediction, or null if they couldn't be loaded (offline, Supabase
  * down), so the caller can keep its last copy. Never throws.
@@ -33,8 +50,7 @@ export async function getAiPredictions(
   toUnix: number,
   signal?: AbortSignal,
 ): Promise<Map<number, AiPrediction> | null> {
-  const out = new Map<number, AiPrediction>()
-  if (!supabaseConfigured) return out
+  if (!supabaseConfigured) return new Map()
   const iso = (u: number) => encodeURIComponent(new Date(u * 1000).toISOString())
   try {
     const rows = await selectRows<PredictionRow>(
@@ -48,20 +64,9 @@ export async function getAiPredictions(
       ].join('&'),
       signal,
     )
-    for (const r of rows) {
-      const validAt = Math.round(Date.parse(r.valid_at) / 1000)
-      out.set(validAt, {
-        validAt,
-        aiScore: r.ai_score,
-        aiWaves: r.ai_waves,
-        aiShape: r.ai_shape,
-        reason: r.reason,
-        modelVersion: r.model_version,
-      })
-    }
+    return aiFromRows(rows)
   } catch (err) {
     if (!signal?.aborted) console.warn('Could not load AI predictions, keeping the last copy', err)
     return null
   }
-  return out
 }
